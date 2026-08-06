@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - ShelfSense AI{% endblock %}
+
+{% block content %}
+
+<style>
+
+.page-header{
+
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:35px;
+flex-wrap:wrap;
+gap:15px;
+
+}
+
+.page-header h1{
+
+font-weight:800;
+font-size:2rem;
+color:#111827;
+
+}
+
+.page-header p{
+
+margin-top:8px;
+color:#6B7280;
+
+}
+
+.ai-badge{
+
+background:#EEF2FF;
+color:#4F46E5;
+padding:10px 18px;
+border-radius:50px;
+font-weight:600;
+
+}
+
+.form-card{
+
+border:none;
+border-radius:26px;
+overflow:hidden;
+
+}
+
+.form-top{
+
+padding:40px;
+
+background:linear-gradient(135deg,#6366F1,#3B82F6);
+
+color:white;
+
+}
+
+.form-top h3{
+
+font-weight:700;
+
+}
+
+.form-top p{
+
+margin-top:10px;
+opacity:.92;
+
+}
+
+.form-body{
+
+padding:40px;
+
+}
+
+.form-control{
+
+height:58px;
+border-radius:16px;
+
+}
+
+.form-control:focus{
+
+transform:translateY(-1px);
+
+}
+
+.form-label{
+
+font-weight:700;
+
+}
+
+.input-group-text{
+
+background:white;
+border-right:none;
+
+}
+
+.input-group .form-control{
+
+border-left:none;
+
+}
+
+.small-note{
+
+font-size:13px;
+color:#6B7280;
+margin-top:8px;
+
+}
+
+.bottom-actions{
+
+display:flex;
+justify-content:flex-end;
+gap:15px;
+margin-top:35px;
+flex-wrap:wrap;
+
+}
+
+.btn{
+
+padding:13px 28px;
+border-radius:14px;
+
+}
+
+.btn-light{
+
+background:#F3F4F6;
+border:none;
+
+}
+
+.btn-light:hover{
+
+background:#E5E7EB;
+
+}
+
+.tip-card{
+
+margin-top:25px;
+border-radius:18px;
+background:#F8FAFC;
+padding:20px;
+display:flex;
+gap:18px;
+align-items:flex-start;
+
+}
+
+.tip-icon{
+
+width:55px;
+height:55px;
+border-radius:16px;
+
+background:linear-gradient(135deg,#6366F1,#3B82F6);
+
+display:flex;
+align-items:center;
+justify-content:center;
+
+color:white;
+
+font-size:22px;
+
+}
+
+.tip-card h6{
+
+font-weight:700;
+margin-bottom:6px;
+
+}
+
+.tip-card p{
+
+margin:0;
+color:#6B7280;
+
+}
+
+@media(max-width:768px){
+
+.form-body{
+
+padding:28px;
+
+}
+
+.form-top{
+
+padding:30px;
+
+}
+
+.bottom-actions{
+
+justify-content:stretch;
+
+}
+
+.bottom-actions .btn{
+
+width:100%;
+
+}
+
+}
+
+</style>
+
+<div class="page-header">
+
+<div>
+
+<h1>
+
+{{ title }}
+
+</h1>
+
+<p>
+
+Manage your product information and let AI calculate the best selling price.
+
+</p>
+
+</div>
+
+<div class="ai-badge">
+
+<i class="bi bi-stars me-2"></i>
+
+AI Assisted Pricing
+
+</div>
+
+</div>
+
+<div class="card form-card">
+
+<div class="form-top">
+
+<h3>
+
+<i class="bi bi-box-seam me-2"></i>
+
+Product Information
+
+</h3>
+
+<p>
+
+Enter your product details below. ShelfSense AI will use these values to generate smart pricing recommendations.
+
+</p>
+
+</div>
+
+<div class="form-body">
+
+<form method="POST">
+
+{{ form.hidden_tag() }}
+
+<div class="mb-4">
+
+{{ form.name.label(class="form-label") }}
+
+<div class="input-group">
+
+<span class="input-group-text">
+
+<i class="bi bi-box"></i>
+
+</span>
+
+{{ form.name(class="form-control") }}
+
+</div>
+
+</div>
+
+<div class="mb-4">
+
+{{ form.cost_price.label("Cost Price (RM)", class="form-label") }}
+
+<div class="input-group">
+
+<span class="input-group-text">
+
+RM
+
+</span>
+
+{{ form.cost_price(class="form-control", placeholder="e.g. RM 150.00") }}
+
+</div>
+
+</div>
+
+<div class="mb-4">
+
+{{ form.target_margin.label(class="form-label") }}
+
+<div class="input-group">
+
+<span class="input-group-text">
+
+%
+
+</span>
+
+{{ form.target_margin(class="form-control", placeholder="e.g. 30") }}
+
+</div>
+
+</div>
+
+<div class="mb-4">
+
+{{ form.category.label(class="form-label") }}
+
+<div class="input-group">
+
+<span class="input-group-text">
+
+<i class="bi bi-tags"></i>
+
+</span>
+
+{{ form.category(class="form-control", placeholder="e.g. Snacks, Beverages") }}
+
+</div>
+
+<div class="small-note">
+
+Optional — AI will suggest categories and smarter pricing in future updates.
+
+</div>
+
+</div>
+
+<div class="bottom-actions">
+
+<a href="javascript:history.back()" class="btn btn-light">
+
+<i class="bi bi-arrow-left me-2"></i>
+
+Cancel
+
+</a>
+
+{{ form.submit(class="btn btn-primary") }}
+
+</div>
+
+</form>
+
+<div class="tip-card">
+
+<div class="tip-icon">
+
+<i class="bi bi-lightbulb-fill"></i>
+
+</div>
+
+<div>
+
+<h6>
+
+AI Pricing Tip
+
+</h6>
+
+<p>
+
+Providing an accurate cost price and realistic target margin helps ShelfSense AI generate better pricing recommendations and improve profitability.
+
+</p>
+
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+{% endblock %}

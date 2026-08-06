@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Login - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+  <div class="col-md-5">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h3 class="text-center mb-4">ShelfSense AI</h3>
+        <form method="POST">
+          {{ form.hidden_tag() }}
+          <div class="mb-3">
+            {{ form.email.label(class="form-label") }}
+            {{ form.email(class="form-control") }}
+          </div>
+          <div class="mb-3">
+            {{ form.password.label(class="form-label") }}
+            {{ form.password(class="form-control") }}
+          </div>
+          <div class="mb-3 form-check">
+            {{ form.remember(class="form-check-input") }}
+            {{ form.remember.label(class="form-check-label") }}
+          </div>
+          {{ form.submit(class="btn btn-primary w-100") }}
+        </form>
+        <p class="text-center mt-3">No account? <a href="{{ url_for('register') }}">Register</a></p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

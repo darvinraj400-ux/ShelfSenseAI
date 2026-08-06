@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h3 class="mb-4">{{ title }}</h3>
+        <form method="POST">
+          {{ form.hidden_tag() }}
+
+          <div class="mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else "")) }}
+            {% for error in form.name.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.cost_price.label("Cost Price (RM)", class="form-label") }}
+              {{ form.cost_price(
+                    class="form-control" + (" is-invalid" if form.cost_price.errors else ""),
+                    id="cost_price",
+                    placeholder="e.g. RM 150.00",
+                    min="0.01",
+                    step="0.01"
+                 ) }}
+              <div class="invalid-feedback d-block" id="cost_price_error" style="display:none;"></div>
+              {% for error in form.cost_price.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="col-md-6 mb-3">
+              {{ form.target_margin.label(class="form-label") }}
+              {{ form.target_margin(class="form-control" + (" is-invalid" if form.target_margin.errors else ""), placeholder="e.g. 30") }}
+              {% for error in form.target_margin.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            {{ form.category.label(class="form-label") }}
+            {{ form.category(class="form-control", placeholder="e.g. Snacks, Beverages") }}
+            <div class="form-text">Optional — AI will suggest later</div>
+          </div>
+
+          {{ form.submit(class="btn btn-primary") }}
+          <a href="{{ url_for('dashboard') }}" class="btn btn-secondary ms-2">Cancel</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const costInput = document.getElementById('cost_price');
+    const errorEl = document.getElementById('cost_price_error');
+    if (!costInput || !errorEl) return;
+
+    costInput.addEventListener('input', function () {
+        const val = parseFloat(this.value);
+        if (this.value.trim() !== '' && (isNaN(val) || val < 0.01)) {
+            this.classList.add('is-invalid');
+            errorEl.textContent = 'Cost price must be at least RM 0.01.';
+            errorEl.style.display = 'block';
+        } else {
+            this.classList.remove('is-invalid');
+            errorEl.style.display = 'none';
+        }
+    });
+});
+</script>
+{% endblock %}
