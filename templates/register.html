@@ -20,6 +20,11 @@
             {{ form.confirm.label(class="form-label") }}
             {{ form.confirm(class="form-control") }}
           </div>
+          <div class="mb-3">
+            {{ form.role.label(class="form-label") }}
+            {{ form.role(class="form-select") }}
+            <div class="form-text">Owner: full control · Manager: manage products & pricing · Staff: view & add</div>
+          </div>
           {{ form.submit(class="btn btn-primary w-100") }}
         </form>
         <p class="text-center mt-3">Have account? <a href="{{ url_for('login') }}">Login</a></p>

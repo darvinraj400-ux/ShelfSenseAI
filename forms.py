@@ -1,6 +1,12 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, FloatField, BooleanField, SubmitField
+from wtforms import StringField, PasswordField, FloatField, BooleanField, SubmitField, SelectField
 from wtforms.validators import DataRequired, Email, Length, NumberRange
+
+ROLE_CHOICES = [
+    ('owner', 'Owner / Admin'),
+    ('manager', 'Manager'),
+    ('staff', 'Staff'),
+]
 
 class LoginForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])
@@ -12,6 +18,7 @@ class RegisterForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
     confirm = PasswordField('Confirm Password', validators=[DataRequired()])
+    role = SelectField('Role', choices=ROLE_CHOICES, default='staff', validators=[DataRequired()])
     submit = SubmitField('Register')
 
 class ProductForm(FlaskForm):

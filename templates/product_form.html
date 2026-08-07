@@ -34,11 +34,28 @@
             </div>
             <div class="col-md-6 mb-3">
               {{ form.target_margin.label(class="form-label") }}
-              {{ form.target_margin(class="form-control" + (" is-invalid" if form.target_margin.errors else ""), placeholder="e.g. 30") }}
+              {{ form.target_margin(class="form-control" + (" is-invalid" if form.target_margin.errors else ""), placeholder="e.g. 30", id="target_margin") }}
               {% for error in form.target_margin.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
             </div>
+          </div>
+
+          {% if baseline_margin is not none %}
+          <div class="alert alert-info py-2 px-3">
+            <small>
+              <strong>PCAPA baseline:</strong> margin locked at <strong>{{ baseline_margin }}%</strong> when this product was created.
+              Raising it above baseline without a cost increase flags a compliance risk.
+            </small>
+          </div>
+          <div id="compliance_warning" class="alert alert-warning py-2 px-3 d-none">
+            <small><strong>⚠️ Compliance warning:</strong>
+              You are raising the margin above the baseline (<span id="base_val">{{ baseline_margin }}%</span>)
+              while the cost price is not increasing. Under the Price Control and Anti-Profiteering Act 2011,
+              an unexplained margin increase is treated as profiteering risk — only a cost increase justifies it.
+            </small>
+          </div>
+          {% endif %}
           </div>
 
           <div class="mb-3">
@@ -50,6 +67,32 @@
           {{ form.submit(class="btn btn-primary") }}
           <a href="{{ url_for('dashboard') }}" class="btn btn-secondary ms-2">Cancel</a>
         </form>
+
+        {% if history %}
+        <hr class="my-4">
+        <h5 class="mb-3">Price History</h5>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped">
+            <thead class="table-light">
+              <tr>
+                <th>Date</th>
+                <th>Cost Price (RM)</th>
+                <th>Margin %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for h in history %}
+              <tr>
+                <td>{{ h.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>{{ "%.2f"|format(h.cost_price) }}</td>
+                <td>{{ h.target_margin }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <small class="text-muted">Every cost/margin change is logged so margin increases can be traced against cost justification.</small>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -72,6 +115,30 @@ document.addEventListener('DOMContentLoaded', function () {
             errorEl.style.display = 'none';
         }
     });
+
+    // ----- PCAPA compliance check: margin above baseline without a cost increase -----
+    const warning = document.getElementById('compliance_warning');
+    const marginInput = document.getElementById('target_margin');
+    const baseVal = document.getElementById('base_val');
+    const prevCost = {{ prev_cost if prev_cost is not none else 'null' }};
+
+    if (warning && marginInput && baseVal) {
+        const baseline = parseFloat(baseVal.textContent);
+        function checkCompliance() {
+            const cost = parseFloat(costInput.value);
+            const margin = parseFloat(marginInput.value);
+            // Only warn when we have a valid cost that is NOT rising above the
+            // previous cost — an empty/invalid cost field should not trigger it.
+            const costNotRising = !isNaN(cost) && cost <= prevCost;
+            if (!isNaN(margin) && margin > baseline && costNotRising) {
+                warning.classList.remove('d-none');
+            } else {
+                warning.classList.add('d-none');
+            }
+        }
+        costInput.addEventListener('input', checkCompliance);
+        marginInput.addEventListener('input', checkCompliance);
+    }
 });
 </script>
 {% endblock %}

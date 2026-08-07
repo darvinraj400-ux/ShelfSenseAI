@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,6 +7,8 @@ from flask_migrate import Migrate
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 from dotenv import load_dotenv
+from datetime import datetime, timezone
+from functools import wraps
 import os
 import pymysql
 
@@ -40,7 +42,13 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='staff')  # owner | manager | staff
     products = db.relationship('Product', backref='owner', lazy=True)
+
+    def can(self, *roles):
+        """Convenience check: is this user allowed one of the given roles?
+        Full permission matrix lands at the 80% milestone."""
+        return self.role in roles
 
     def set_password(self, pw):
         self.password_hash = generate_password_hash(pw)
@@ -54,12 +62,31 @@ class Product(db.Model):
     name = db.Column(db.String(120), nullable=False)
     cost_price = db.Column(db.Float, nullable=False)
     target_margin = db.Column(db.Float, nullable=False)  # percentage e.g. 30.0
+    baseline_margin = db.Column(db.Float, nullable=True)  # margin locked at creation (PCAPA baseline)
     category = db.Column(db.String(80), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    history = db.relationship('PriceHistory', backref='product', lazy=True,
+                              cascade='all, delete-orphan',
+                              order_by='PriceHistory.created_at')
 
     @property
     def suggested_price(self):
         return round(self.cost_price * (1 + self.target_margin / 100), 2)
+
+
+# -------------------------------------------------
+# NEW MODEL – Price history log (cost/margin changes per product)
+# Used for PCAPA-style margin-baseline tracking: every cost or margin
+# change is recorded so an unexplained margin increase is visible.
+# -------------------------------------------------
+class PriceHistory(db.Model):
+    __tablename__ = 'price_history'
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    cost_price = db.Column(db.Float, nullable=False)
+    target_margin = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+# -------------------------------------------------
 
 
 # -------------------------------------------------
@@ -138,6 +165,32 @@ def load_user(uid):
     return User.query.get(int(uid))
 
 
+# -------------------------------------------------
+# Role-based access control (stub for the 80% milestone)
+# -------------------------------------------------
+def role_required(*roles):
+    """Decorator: restrict a view to users with one of the given roles.
+    Stub — the full permission matrix (what each role may do) is defined
+    at the 80% milestone. Usage:
+        @app.route('/admin')
+        @login_required
+        @role_required('owner')
+        def admin(): ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if not current_user.is_authenticated:
+                abort(403)
+            if not current_user.can(*roles):
+                flash('You do not have permission to access that page.', 'danger')
+                abort(403)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+# -------------------------------------------------
+
+
 # --- Routes ---
 @app.route('/')
 def home():
@@ -153,7 +206,10 @@ def register():
         if User.query.filter_by(email=form.email.data).first():
             flash('Email already registered', 'danger')
         else:
-            u = User(email=form.email.data)
+            # NOTE (80% milestone): currently anyone can self-select 'owner'.
+            # Before role_required() guards any sensitive route, restrict this
+            # (e.g. first-registered-user-is-owner, or admin approves owners).
+            u = User(email=form.email.data, role=form.role.data)
             u.set_password(form.password.data)
             db.session.add(u)
             db.session.commit()
@@ -202,11 +258,19 @@ def new_product():
             category=form.category.data,
             user_id=current_user.id
         )
+        p.baseline_margin = p.target_margin  # lock the margin baseline at creation
         db.session.add(p)
+        db.session.flush()  # obtain p.id for the history row
+        db.session.add(PriceHistory(
+            product_id=p.id,
+            cost_price=p.cost_price,
+            target_margin=p.target_margin
+        ))
         db.session.commit()
         flash('Product added!', 'success')
         return redirect(url_for('dashboard'))
-    return render_template('product_form.html', form=form, title='Add Product')
+    return render_template('product_form.html', form=form, title='Add Product',
+                           baseline_margin=None, prev_cost=None, history=None)
 
 
 @app.route('/product/<int:pid>/edit', methods=['GET', 'POST'])
@@ -218,11 +282,46 @@ def edit_product(pid):
         return redirect(url_for('dashboard'))
     form = ProductForm(obj=p)
     if form.validate_on_submit():
+        old_cost = p.cost_price
+        old_margin = p.target_margin
+        new_cost = form.cost_price.data
+        new_margin = form.target_margin.data
+
+        # Products created before baseline tracking existed: adopt the current
+        # margin as their baseline (there is no older data to reconstruct).
+        if p.baseline_margin is None:
+            p.baseline_margin = old_margin
+
         form.populate_obj(p)
+
+        # Log every cost/margin change — the visible "cost history" trail.
+        if new_cost != old_cost or new_margin != old_margin:
+            db.session.add(PriceHistory(
+                product_id=p.id,
+                cost_price=new_cost,
+                target_margin=new_margin
+            ))
+
+        # PCAPA-style compliance check: raising the margin beyond baseline with
+        # no cost increase is an *unexplained* margin increase → profiteering risk.
+        if new_margin > p.baseline_margin and new_cost <= old_cost:
+            flash(
+                f'⚠️ Compliance warning: margin raised from {p.baseline_margin:g}% to '
+                f'{new_margin:g}% with no cost increase. Under the Price Control and '
+                f'Anti-Profiteering Act 2011, only a cost increase justifies a higher '
+                f'margin — an unexplained increase is treated as profiteering risk.',
+                'warning'
+            )
+
         db.session.commit()
         flash('Product updated!', 'success')
         return redirect(url_for('dashboard'))
-    return render_template('product_form.html', form=form, title='Edit Product')
+
+    history = (PriceHistory.query.filter_by(product_id=p.id)
+               .order_by(PriceHistory.created_at.desc()).limit(10).all())
+    return render_template('product_form.html', form=form, title='Edit Product',
+                           baseline_margin=p.baseline_margin, prev_cost=p.cost_price,
+                           history=history)
 
 
 @app.route('/product/<int:pid>/delete', methods=['POST'])
