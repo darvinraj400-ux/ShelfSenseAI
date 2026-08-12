@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Employee Management - ShelfSense AI{% endblock %}
+{% block content %}
+<h2 class="mb-3">Employee Management</h2>
+<p class="text-muted">{{ current_user.shop.name if current_user.shop else 'Your shop' }} — only the Owner can invite employees.</p>
+
+<div class="row">
+  <!-- Current team -->
+  <div class="col-lg-7 mb-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">Current Employees</h5>
+        {% if team %}
+        <div class="table-responsive">
+          <table class="table table-sm table-striped">
+            <thead class="table-light">
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for u in team %}
+              <tr>
+                <td>{{ u.email }}</td>
+                <td>{{ u.role|title }}</td>
+                <td><span class="badge bg-success">Active</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No employees yet — invite your first manager or staff member below.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Invitations -->
+    <div class="card mt-4">
+      <div class="card-body">
+        <h5 class="mb-3">Invitations</h5>
+        {% if invitations %}
+        <div class="table-responsive">
+          <table class="table table-sm table-striped">
+            <thead class="table-light">
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for i in invitations %}
+              <tr>
+                <td>{{ i.email }}</td>
+                <td>{{ i.role|title }}</td>
+                <td>
+                  {% if i.status == 'pending' %}<span class="badge bg-warning text-dark">Pending</span>
+                  {% elif i.status == 'accepted' %}<span class="badge bg-success">Accepted</span>
+                  {% elif i.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                  {% else %}<span class="badge bg-danger">Expired</span>{% endif %}
+                </td>
+                <td>{{ i.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>{{ i.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="text-end">
+                  {% if i.status == 'pending' %}
+                  <form method="POST" action="{{ url_for('revoke_invitation', iid=i.id) }}" class="d-inline"
+                        onsubmit="return confirm('Revoke this invitation?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-sm btn-outline-danger">Revoke</button>
+                  </form>
+                  {% else %}
+                  <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No invitations yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Invite form -->
+  <div class="col-lg-5 mb-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">Invite Employee</h5>
+        <form method="POST">
+          {{ form.hidden_tag() }}
+          <div class="mb-3">
+            {{ form.email.label(class="form-label") }}
+            {{ form.email(class="form-control" + (" is-invalid" if form.email.errors else ""), placeholder="employee@email.com") }}
+            {% for error in form.email.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="mb-3">
+            {{ form.role.label(class="form-label") }}
+            {{ form.role(class="form-select" + (" is-invalid" if form.role.errors else "")) }}
+            {% for error in form.role.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+          {{ form.submit(class="btn btn-primary") }}
+        </form>
+        <hr>
+        <small class="text-muted">
+          After creating an invitation, the generated link is shown on screen —
+          share it with the employee (no email service in this phase).
+          Invitations expire after 48 hours.
+        </small>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

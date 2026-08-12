@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Sales History - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Sales History</h2>
+  <a href="{{ url_for('new_sale') }}" class="btn btn-primary">+ Record Sale</a>
+</div>
+
+{% if sales %}
+<div class="table-responsive">
+  <table class="table table-striped table-hover">
+    <thead class="table-light">
+      <tr>
+        <th>Date / Time</th>
+        <th>Product</th>
+        <th class="text-end">Qty</th>
+        <th class="text-end">Price (per unit)</th>
+        <th class="text-end">Revenue</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sales %}
+      <tr>
+        <td>{{ s.sold_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ s.product.name }}</td>
+        <td class="text-end">{{ s.quantity|fmt_qty }}</td>
+        <td class="text-end">RM{{ "%.2f"|format(s.selling_price) }}</td>
+        <td class="text-end"><strong>RM{{ "%.2f"|format(s.quantity * s.selling_price) }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<small class="text-muted">Revenue is calculated (quantity × per-unit price) — it is not stored.</small>
+{% else %}
+<div class="text-center py-5 text-muted">
+  <p>No sales recorded yet.</p>
+  <a href="{{ url_for('new_sale') }}" class="btn btn-primary">Record the first sale</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -7,10 +7,17 @@
 
 import os
 import re
+import sys
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.types import VARCHAR
 from dotenv import load_dotenv
+
+# Windows consoles default to cp1252, which cannot encode the non-ASCII
+# characters used in the progress prints ("→", "⚠️", "✅"...). Force UTF-8
+# output so the script does not crash on the very first message.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # ----------------------------------------------------------------------
 # 1️⃣ Load environment variables (so we get DATABASE_URL from .env)
@@ -158,6 +165,26 @@ for key_col, tbl in (("item_code", "lookup_item"), ("premise_code", "lookup_prem
         dfs[tbl] = dfs[tbl].loc[~dup_mask].reset_index(drop=True)
 
 # ----------------------------------------------------------------------
+# 5.5.5️⃣ Exclude item groups the shop does not sell
+# ----------------------------------------------------------------------
+# The shop does not stock fresh produce (wet-market style goods) or
+# ready-to-cook meals, so those PriceCatcher items are dropped from the
+# lookup. This runs BEFORE the orphan filter in 5.6, so any `price` rows
+# pointing at excluded items are dropped there too — otherwise they would
+# violate the foreign key when the tables are rebuilt.
+EXCLUDED_ITEM_GROUPS = {"BARANGAN SEGAR", "MAKANAN SIAP MASAK"}
+
+excluded_mask = dfs["lookup_item"]["item_group"].isin(EXCLUDED_ITEM_GROUPS)
+n_excluded = int(excluded_mask.sum())
+if n_excluded:
+    print(f"ℹ️  Excluding {n_excluded:,} item(s) from groups: "
+          f"{', '.join(sorted(EXCLUDED_ITEM_GROUPS))}")
+    dfs["lookup_item"] = dfs["lookup_item"].loc[~excluded_mask].reset_index(drop=True)
+else:
+    print(f"ℹ️  No items matched the excluded groups "
+          f"{sorted(EXCLUDED_ITEM_GROUPS)} — nothing to drop.")
+
+# ----------------------------------------------------------------------
 # 5.6️⃣ Drop genuine orphan rows in `price` before loading
 # ----------------------------------------------------------------------
 # Even after normalizing formatting, the price snapshot and the lookup
@@ -210,7 +237,8 @@ DTYPES = {
 # a safety net so drop order/existence never blocks a re-run.
 with engine.begin() as conn:
     conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
-    for tbl_name in ("price", "lookup_item", "lookup_premise"):
+    # price_catcher_item is a derived table, so drop it first.
+    for tbl_name in ("price_catcher_item", "price", "lookup_item", "lookup_premise"):
         conn.execute(text(f"DROP TABLE IF EXISTS `{tbl_name}`"))
     conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
 
@@ -284,5 +312,33 @@ with engine.begin() as conn:   # begin() gives us a transaction that auto‑comm
         """
     ))
 
-print("\n✅ All three tables are now loaded, primary keys set, and foreign keys in place.")
+# ----------------------------------------------------------------------
+# 8️⃣ Build the denormalized PriceCatcherItem table
+# ----------------------------------------------------------------------
+# A denormalized copy of lookup_item with a surrogate `id` as PK. EVERY
+# lookup item is included — whether or not it has rows in the `price` table
+# (market data is optional; membership is NOT gated on it). This lets the
+# app reference items by a single integer id instead of the string item_code.
+with engine.begin() as conn:
+    conn.execute(text("DROP TABLE IF EXISTS price_catcher_item"))
+    conn.execute(text(f"""
+        CREATE TABLE price_catcher_item (
+            id            INT AUTO_INCREMENT PRIMARY KEY,
+            item_code     VARCHAR({item_code_len}) NOT NULL,
+            item          VARCHAR(255) NOT NULL,
+            unit          VARCHAR(50),
+            item_group    VARCHAR(100),
+            item_category VARCHAR(100),
+            UNIQUE KEY uq_pc_item_code (item_code)
+        )
+    """))
+    n_items = conn.execute(text("""
+        INSERT INTO price_catcher_item (item_code, item, unit, item_group, item_category)
+        SELECT item_code, item, unit, item_group, item_category
+        FROM lookup_item
+        ORDER BY item_code
+    """)).rowcount
+print(f"✅ price_catcher_item built with {n_items:,} rows (all lookup items).")
+
+print("\n✅ All tables are now loaded, primary keys set, and foreign keys in place.")
 print("You can now start/restart your Flask app and the /autocomplete route will work.")

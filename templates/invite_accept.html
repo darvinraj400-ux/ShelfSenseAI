@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Accept Invitation - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h3 class="mb-3">Join {{ invitation.shop.name }}</h3>
+        <p>You've been invited to join this shop. The details below come from the
+          invitation and cannot be changed:</p>
+        <ul class="mb-4">
+          <li><strong>Email:</strong> {{ invitation.email }}</li>
+          <li><strong>Shop:</strong> {{ invitation.shop.name }}</li>
+          <li><strong>Role:</strong> {{ invitation.role|title }}</li>
+        </ul>
+
+        <p class="text-muted">Create your account to accept:</p>
+        <form method="POST">
+          {{ form.hidden_tag() }}
+
+          <div class="mb-3">
+            {{ form.password.label(class="form-label") }}
+            {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else "")) }}
+            {% for error in form.password.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <div class="mb-3">
+            {{ form.confirm.label(class="form-label") }}
+            {{ form.confirm(class="form-control" + (" is-invalid" if form.confirm.errors else "")) }}
+            {% for error in form.confirm.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          {{ form.submit(class="btn btn-primary") }}
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

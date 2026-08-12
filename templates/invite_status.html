@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Invitation - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body p-4 text-center">
+        <h3 class="mb-3">Invitation</h3>
+        {% if invitation.status == 'accepted' %}
+        <div class="alert alert-success">
+          <strong>Already accepted.</strong> This invitation has already been used.
+        </div>
+        {% elif invitation.status == 'revoked' %}
+        <div class="alert alert-secondary">
+          <strong>Revoked.</strong> This invitation was revoked by the shop owner.
+        </div>
+        {% else %}
+        <div class="alert alert-danger">
+          <strong>Expired.</strong> This invitation has passed its 48-hour validity.
+          Ask the shop owner to send a new one.
+        </div>
+        {% endif %}
+        <a href="{{ url_for('login') }}" class="btn btn-primary">Go to login</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

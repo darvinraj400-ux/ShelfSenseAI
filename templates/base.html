@@ -67,11 +67,23 @@
 📦 ShelfSense AI
 </a>
 
+<ul class="navbar-nav me-auto mb-2 mb-lg-0">
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Products</a></li>
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('sales') }}">Sales</a></li>
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('inventory') }}">Inventory</a></li>
+  {% if current_user.is_authenticated and current_user.role == 'owner' %}
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('employees') }}">Employees</a></li>
+  {% endif %}
+</ul>
+
 <div class="ms-auto">
 
 <span class="navbar-text me-3">
 👤 {{ current_user.email }}
 <span class="badge bg-light text-dark ms-1">{{ current_user.role|title }}</span>
+{% if current_user.is_authenticated and current_user.shop %}
+<span class="badge bg-info text-dark ms-1">🏪 {{ current_user.shop.name }}</span>
+{% endif %}
 </span>
 
 <a class="btn btn-light btn-sm"
@@ -117,6 +129,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Adjust the `name` attributes if your WTForms fields use different names.
     const nameInput = document.querySelector('input[name="name"]');   // Product Name field
     const catInput  = document.querySelector('input[name="category"]'); // Category field
+    const unitInput = document.querySelector('input[name="unit"]');   // Unit field (optional)
 
     if (!nameInput || !catInput) {
         console.warn('Autocomplete script: could not find name or category inputs');
@@ -182,9 +195,11 @@ document.addEventListener('DOMContentLoaded', function () {
             div.onmouseover = () => { div.style.backgroundColor = '#f0f0f0'; };
             div.onmouseout  = () => { div.style.backgroundColor = ''; };
             div.onclick = () => {
-                // Fill the inputs
+                // Fill the inputs (pure input-assistance - the picked item is NOT
+                // linked to the product as a permanent PriceCatcher relationship)
                 nameInput.value = it.item;
                 catInput.value  = it.item_category || '';
+                if (unitInput) unitInput.value = it.unit || '';
                 // Hide dropdown
                 dropdown.style.display = 'none';
             };

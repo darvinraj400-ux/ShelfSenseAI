@@ -2,8 +2,10 @@
 {% block title %}Dashboard - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>My Products</h2>
+  <h2>{% if current_user.shop %}{{ current_user.shop.name }}{% else %}My{% endif %} Products</h2>
+  {% if current_user.role in ['owner', 'manager'] %}
   <a href="{{ url_for('new_product') }}" class="btn btn-primary">+ Add Product</a>
+  {% endif %}
 </div>
 
 {% if products %}
@@ -12,8 +14,11 @@
     <thead class="table-light">
       <tr>
         <th>Product</th>
+        <th>Brand</th>
         <th>Category</th>
         <th>Cost Price</th>
+        <th>Current Price</th>
+        <th>Stock</th>
         <th>Margin %</th>
         <th>Suggested Price</th>
         <th class="text-end">Actions</th>
@@ -23,16 +28,23 @@
       {% for p in products %}
       <tr>
         <td>{{ p.name }}</td>
-        <td>{{ p.category or '-' }}</td>
+        <td>{{ p.brand or '—' }}</td>
+        <td>{{ p.category or '—' }}</td>
         <td>RM{{ "%.2f"|format(p.cost_price) }}</td>
+        <td>{% if p.selling_price is not none %}RM{{ "%.2f"|format(p.selling_price) }}{% else %}—{% endif %}</td>
+        <td>{% set inv = inv_map.get(p.id) %}{{ inv.current_stock|fmt_qty if inv else '—' }}</td>
         <td>{{ p.target_margin }}%</td>
         <td><strong>RM{{ "%.2f"|format(p.suggested_price) }}</strong></td>
         <td class="text-end">
+          {% if current_user.role in ['owner', 'manager'] %}
           <a href="{{ url_for('edit_product', pid=p.id) }}" class="btn btn-sm btn-outline-primary">Edit</a>
           <form method="POST" action="{{ url_for('delete_product', pid=p.id) }}" class="d-inline" onsubmit="return confirm('Delete this product?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-outline-danger">Delete</button>
           </form>
+          {% else %}
+          <span class="text-muted">view only</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
@@ -42,7 +54,9 @@
 {% else %}
 <div class="text-center py-5 text-muted">
   <p>No products yet.</p>
+  {% if current_user.role in ['owner', 'manager'] %}
   <a href="{{ url_for('new_product') }}" class="btn btn-primary">Add your first product</a>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

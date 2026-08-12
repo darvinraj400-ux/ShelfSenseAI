@@ -17,6 +17,12 @@
             {% endfor %}
           </div>
 
+          <div class="mb-3">
+            {{ form.brand.label(class="form-label") }}
+            {{ form.brand(class="form-control", placeholder="e.g. MILO, MAGGI, Generic") }}
+            <div class="form-text">Optional — leave blank if the product has no clear brand.</div>
+          </div>
+
           <div class="row">
             <div class="col-md-6 mb-3">
               {{ form.cost_price.label("Cost Price (RM)", class="form-label") }}
@@ -36,6 +42,31 @@
               {{ form.target_margin.label(class="form-label") }}
               {{ form.target_margin(class="form-control" + (" is-invalid" if form.target_margin.errors else ""), placeholder="e.g. 30", id="target_margin") }}
               {% for error in form.target_margin.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              {{ form.selling_price.label(class="form-label") }}
+              {{ form.selling_price(class="form-control" + (" is-invalid" if form.selling_price.errors else ""), placeholder="e.g. 21.00", min="0.01", step="0.01") }}
+              <div class="form-text">Current price customers pay — optional.</div>
+              {% for error in form.selling_price.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="col-md-4 mb-3">
+              {{ form.quantity.label(class="form-label") }}
+              {{ form.quantity(class="form-control" + (" is-invalid" if form.quantity.errors else ""), placeholder="e.g. 1, 500, 1000") }}
+              {% for error in form.quantity.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="col-md-4 mb-3">
+              {{ form.unit.label(class="form-label") }}
+              {{ form.unit(class="form-control" + (" is-invalid" if form.unit.errors else ""), placeholder="e.g. kg, g, L, pcs") }}
+              {% for error in form.unit.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
             </div>
@@ -77,6 +108,7 @@
               <tr>
                 <th>Date</th>
                 <th>Cost Price (RM)</th>
+                <th>Selling Price (RM)</th>
                 <th>Margin %</th>
               </tr>
             </thead>
@@ -85,6 +117,7 @@
               <tr>
                 <td>{{ h.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td>{{ "%.2f"|format(h.cost_price) }}</td>
+                <td>{{ "%.2f"|format(h.selling_price) if h.selling_price is not none else '—' }}</td>
                 <td>{{ h.target_margin }}%</td>
               </tr>
               {% endfor %}

@@ -9,6 +9,11 @@
         <form method="POST">
           {{ form.hidden_tag() }}
           <div class="mb-3">
+            {{ form.shop_name.label(class="form-label") }}
+            {{ form.shop_name(class="form-control", placeholder="e.g. Demo Retail Shop") }}
+            <div class="form-text">Your new shop is created when you register — you become its Owner.</div>
+          </div>
+          <div class="mb-3">
             {{ form.email.label(class="form-label") }}
             {{ form.email(class="form-control") }}
           </div>
@@ -19,11 +24,6 @@
           <div class="mb-3">
             {{ form.confirm.label(class="form-label") }}
             {{ form.confirm(class="form-control") }}
-          </div>
-          <div class="mb-3">
-            {{ form.role.label(class="form-label") }}
-            {{ form.role(class="form-select") }}
-            <div class="form-text">Owner: full control · Manager: manage products & pricing · Staff: view & add</div>
           </div>
           {{ form.submit(class="btn btn-primary w-100") }}
         </form>
