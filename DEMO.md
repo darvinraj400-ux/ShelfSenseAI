@@ -21,21 +21,27 @@ Everything below is verified working against the live system.
 
 ## 1. FRONTEND (User Interface)
 
-### 1.1 Registration — Shop + Owner
+### 1.1 Registration — two paths
 - Open `http://127.0.0.1:5000/register`
-- Point out the form: **Shop Name** + Email + Password (no public role dropdown).
-- **Talk track:** *"Registration creates a brand-new shop and you become its
-  Owner automatically — a stranger cannot register as the owner or manager of
-  an existing shop. Manager/Staff accounts will join a shop via invitations
-  (future milestone)."*
+- Point out the **account-purpose selector**: *Create a new shop* OR
+  *Join an existing shop* (there is no public role dropdown anywhere).
+- **Create a new shop** → Shop Name + Email + Password → brand-new shop,
+  registrant becomes its **Owner**.
+- **Join an existing shop** → Email + Password → employee account with **no
+  shop membership yet**; the Owner's invitation decides the final role.
+- **Talk track:** *"There is no role picker. You either create a brand-new
+  shop and become its Owner, or create an employee account that joins a shop
+  only after the Owner invites you — and you explicitly accept."*
 
 ### 1.2 Login & role badge
 - Log in as `owner@demo.my` / `Demo1234!`
 - Show the **navbar badge** (`Owner`) next to the email — every role sees its own badge.
 
 ### 1.3 Dashboard — product table
-- The table shows: Product, Brand, Category, Cost Price, **Current Price**, **Stock**,
-  Margin %, **Suggested Price**.
+- The table shows: Product, Brand, Category, **Size** (package size, e.g. 1 kg),
+  Cost Price, **Current Price**, **Stock**, Margin %, **Suggested Price**.
+- **Talk track:** *"Size is what's inside one package — Stock is how many
+  sellable packages you have. Two different numbers on purpose."*
 - **Talk track:** *"Two prices per product: the **current price** the shop actually
   charges, and the **suggested price** computed from cost × target margin. When they
   differ, that's a pricing decision the system can later recommend."*
@@ -51,16 +57,21 @@ Everything below is verified working against the live system.
 - **Talk track:** *"We integrated Malaysia's open PriceCatcher data — the same
   dataset KPDN publishes. Clients pick real items instead of typing names."*
 
-### 1.5 Employee invitations (Phase 2C)
+### 1.5 Employee invitations & notifications (Phase 2C + 2D)
 - The Owner's navbar shows **Employees** (manager/staff never see it).
 - **Invite** → pick a role (Manager/Staff, never Owner) → a secure 43-char
   token link is generated and shown on screen (no email service in this phase).
-- The invited employee opens `/invite/accept/<token>`: new email → account
-  creation form (email/shop/role fixed from the invitation); existing email →
-  must log in as that account first. They join the SAME shop — no new shop is
-  ever created, and shop/role tampering is ignored.
-- Invitations expire after 48h and can be revoked by the Owner. An account
-  that already belongs to another shop can never be moved.
+- **In-app notifications:** every logged-in user has a 🔔 bell in the navbar
+  with an unread-count badge. Inviting an email that already has an account
+  (or the invitee registering later) creates a *"Shop Invitation"*
+  notification with **Accept / Reject** buttons on the Notifications page.
+- Opening the token link with a NEW email creates the employee account (no
+  shop membership yet) and lands the user on their notifications, where they
+  **explicitly Accept** — an employee is never auto-added to a shop.
+- The invitation is authoritative for shop + role; shop/role tampering is
+  ignored, and an account that already belongs to another shop can never be
+  moved. Invitations expire after 48h, can be revoked by the Owner, and a
+  declined invitation shows as **Declined** (distinct from revoked).
 
 ### 1.6 Sales & Inventory (Phase 2B)
 - The navbar now has **Products / Sales / Inventory**.
@@ -70,11 +81,19 @@ Everything below is verified working against the live system.
   happen in ONE transaction; insufficient stock is rejected.
 - **Sales History** (`/sales`): date/time, product, qty, per-unit price,
   calculated revenue (qty × price — never stored).
-- **Inventory** (`/inventory`): current stock per product with an
-  **Adjust** flow (`/inventory/<id>/adjust`) for owner/manager — a +/- change
-  with a reason, logged to `inventory_adjustment`. Stock can never go negative.
+- **Inventory** (`/inventory`): shows **Product Size** (e.g. 1 kg) next to
+  **Current Stock** — the size-vs-stock distinction is explicit.
+- **Receive Stock** (`/inventory/<id>/receive`): the obvious "how do I add
+  stock?" flow — enter a positive quantity + reason, stock increases
+  atomically and the movement is logged to `inventory_adjustment` (with the
+  acting user).
+- **Adjust** (`/inventory/<id>/adjust`): owner/manager corrections (+/-) with
+  a reason — still logged, stock can never go negative. The inventory page
+  also shows the last 10 **stock movements** (who/what/when).
+- Changing a product's **Quantity/Unit** (package size) never touches
+  inventory stock.
 - **Staff** can view products/sales/inventory and record sales, but cannot
-  edit/delete products or adjust stock.
+  receive/adjust stock or edit/delete products.
 - Products with sales history **cannot be deleted** — history is preserved.
 
 ---
@@ -128,6 +147,8 @@ The core answer to *"is the target margin justified, or arbitrary?"*:
 | `sale` | completed sales (per-unit price snapshot) | 0 (recorded live) |
 | `inventory` | current stock per product (never negative) | 1 per product |
 | `inventory_adjustment` | manual stock changes with reason | logged live |
+| `shop_invitation` | employee invitations (token, status, expiry) | 0 (live) |
+| `notification` | in-app notifications (invitations, unread badge) | 0 (live) |
 
 ### 3.2 Live SQL demo queries
 ```sql
@@ -162,7 +183,7 @@ ORDER BY h.created_at DESC LIMIT 10;
 
 ## Suggested demo flow (10 minutes)
 
-1. **Register** → Shop Name + email → new shop + Owner role created
+1. **Register** → choose **Create a new shop** → Shop Name + email → new shop + Owner created
 2. **Login as owner** → dashboard + role badge
 3. **Add product** → type `milo` → autocomplete fills name + category
 4. **Show market alignment** → suggested price ≈ market average (database query)

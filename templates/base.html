@@ -74,6 +74,7 @@
   {% if current_user.is_authenticated and current_user.role == 'owner' %}
   <li class="nav-item"><a class="nav-link" href="{{ url_for('employees') }}">Employees</a></li>
   {% endif %}
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('notifications') }}" title="Notifications">🔔{% if unread_notifications %}<span class="badge bg-danger ms-1">{{ unread_notifications }}</span>{% endif %}</a></li>
 </ul>
 
 <div class="ms-auto">

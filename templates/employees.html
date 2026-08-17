@@ -63,6 +63,7 @@
                   {% if i.status == 'pending' %}<span class="badge bg-warning text-dark">Pending</span>
                   {% elif i.status == 'accepted' %}<span class="badge bg-success">Accepted</span>
                   {% elif i.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                  {% elif i.status == 'rejected' %}<span class="badge bg-danger">Declined</span>
                   {% else %}<span class="badge bg-danger">Expired</span>{% endif %}
                 </td>
                 <td>{{ i.created_at.strftime('%Y-%m-%d %H:%M') }}</td>

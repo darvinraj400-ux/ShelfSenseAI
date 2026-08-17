@@ -12,7 +12,7 @@
     <thead class="table-light">
       <tr>
         <th>Product</th>
-        <th>Brand</th>
+        <th>Product Size</th>
         <th class="text-end">Current Stock</th>
         <th class="text-end">Minimum Stock</th>
         <th>Last Updated</th>
@@ -24,7 +24,7 @@
       {% set inv = inv_map.get(p.id) %}
       <tr>
         <td>{{ p.name }}</td>
-        <td>{{ p.brand or '—' }}</td>
+        <td class="text-muted">{{ p.size_label }}</td>
         <td class="text-end">
           <strong>{{ inv.current_stock|fmt_qty if inv else '0' }}</strong>
           {% if inv and inv.current_stock is not none and inv.current_stock <= inv.minimum_stock %}
@@ -35,6 +35,7 @@
         <td>{{ inv.updated_at.strftime('%Y-%m-%d %H:%M') if inv and inv.updated_at else '—' }}</td>
         <td class="text-end">
           {% if current_user.role in ['owner', 'manager'] %}
+          <a href="{{ url_for('receive_inventory', pid=p.id) }}" class="btn btn-sm btn-success">Receive</a>
           <a href="{{ url_for('adjust_inventory', pid=p.id) }}" class="btn btn-sm btn-outline-primary">Adjust</a>
           {% else %}
           <span class="text-muted">view only</span>
@@ -45,7 +46,44 @@
     </tbody>
   </table>
 </div>
-<small class="text-muted">Stock only changes through recorded sales or manual adjustments — the system never invents stock.</small>
+<div class="alert alert-info py-2 small">
+  <strong>Product Size</strong> (e.g. 1 kg) is the size of ONE package — it is not
+  your stock. <strong>Current Stock</strong> is how many sellable units you have.
+  Use <strong>Receive</strong> when new stock arrives; <strong>Adjust</strong> for
+  corrections (e.g. damaged or counted stock).
+</div>
+
+{% if current_user.role in ['owner', 'manager'] and movements %}
+<hr class="my-4">
+<h5 class="mb-3">Recent Stock Movements</h5>
+<div class="table-responsive">
+  <table class="table table-sm table-striped">
+    <thead class="table-light">
+      <tr>
+        <th>Date</th>
+        <th>Product</th>
+        <th class="text-end">Change</th>
+        <th>Reason</th>
+        <th>By</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in movements %}
+      <tr>
+        <td>{{ m.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ m.product.name }}</td>
+        <td class="text-end">
+          {% if m.quantity_change > 0 %}<span class="text-success">+{{ m.quantity_change|fmt_qty }}</span>
+          {% else %}<span class="text-danger">{{ m.quantity_change|fmt_qty }}</span>{% endif %}
+        </td>
+        <td>{{ m.reason }}</td>
+        <td>{{ m.user.email if m.user else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% else %}
 <div class="text-center py-5 text-muted">
   <p>No products yet.</p>

@@ -64,13 +64,25 @@ class LoginForm(FlaskForm):
 
 
 class RegisterForm(FlaskForm):
-    """New-account fields.
-    NEW SHOP-BASED FLOW: there is NO public role dropdown any more. Every
-    registration creates a brand-new shop, and the registrant automatically
-    becomes its OWNER (role='owner'). Future invitation flow (owner invites
-    manager/staff into the same shop) will add users to an existing shop_id."""
-    shop_name = StringField('Shop Name', validators=[DataRequired(), Length(max=120)])
-    #   - The new shop's display name (e.g. "Demo Retail Shop").
+    """New-account fields - TWO registration paths (the account purpose is
+    chosen FIRST, and there is NO public role dropdown anywhere):
+      A) 'shop'     -> creates a NEW shop; the registrant becomes its OWNER.
+      B) 'employee' -> creates an employee account with NO shop membership;
+                       the owner's invitation later decides the final
+                       shop + role (manager/staff) when it is accepted.
+    The role is NEVER taken from the form - it is derived from the path and,
+    for employees, from the authoritative invitation row."""
+    account_type = SelectField('I want to…',
+                               choices=[('shop', 'Create a new shop (become an Owner)'),
+                                        ('employee', 'Join an existing shop (as an employee)')],
+                               validators=[DataRequired()])
+    #   - 'employee' accounts can never pick a role: joining a shop is always
+    #     driven by an owner's invitation and an explicit accept.
+    shop_name = StringField('Shop Name', validators=[Length(max=120)])
+    #   - Required ONLY on the "create a new shop" path. NOTE: no Optional()
+    #     here - Optional raises StopValidation and would silently SKIP the
+    #     custom validate_shop_name below (WTForms appends custom validators
+    #     to the field's validator chain, after Optional).
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
     #   - Length(min=6): enforce a minimum password length on the SERVER,
@@ -81,7 +93,13 @@ class RegisterForm(FlaskForm):
                                                 message='Passwords must match')])
     #   - EqualTo: server-side password/confirm check. No longer relies on
     #     client-side JS alone - the server rejects mismatched passwords.
-    submit = SubmitField('Register')
+    submit = SubmitField('Create Account')
+
+    def validate_shop_name(self, field):
+        # Shop name only matters on the shop-creation path; an employee who
+        # wants to JOIN an existing shop must not be asked for one.
+        if self.account_type.data == 'shop' and not field.data:
+            raise ValidationError('Shop name is required to create a new shop.')
 
 
 class ProductForm(FlaskForm):
@@ -94,9 +112,12 @@ class ProductForm(FlaskForm):
     #   - Optional (e.g. MILO, MAGGI) - not every product has a clear brand.
     category = StringField('Category (optional)', validators=[Length(max=80)])
     #   - Optional — the autocomplete API fills this from PriceCatcher data.
-    quantity = FloatField('Quantity (optional)', validators=[Optional(), NumberRange(min=0.01)])
-    #   - Optional numeric amount (e.g. 1, 500, 1000). Must be > 0 when supplied;
-    #     interpreted together with `unit` (1 + kg, NOT the string "1kg").
+    quantity = FloatField('Quantity per Product (optional)',
+                          validators=[Optional(), NumberRange(min=0.01)])
+    #   - PACKAGE SIZE, NOT STOCK: the amount contained in ONE product/package
+    #     (e.g. 1, 500, 1000), read together with `unit` (1 + kg, NOT the
+    #     string "1kg"). Current sellable stock lives in Inventory.current_stock
+    #     and is managed on the Inventory page - this field never touches it.
     unit = StringField('Unit (optional)', validators=[Length(max=20)])
     #   - Optional unit of measure: kg, g, L, ml, pcs, pack, box...
     cost_price = FloatField('Cost Price (RM)', validators=[DataRequired(), NumberRange(min=0.01)])
@@ -157,6 +178,18 @@ class InviteAcceptForm(FlaskForm):
                                         EqualTo('password',
                                                 message='Passwords must match')])
     submit = SubmitField('Accept Invitation')
+
+
+class ReceiveStockForm(FlaskForm):
+    """The positive-only "Receive Stock" flow: add sellable units to a product's
+    inventory. quantity_received must be > 0 (InputRequired lets 0/negative
+    reach NumberRange so they get a clear error instead of being treated as
+    empty). A reason is required so every stock-in stays traceable."""
+    quantity_received = FloatField('Quantity Received',
+                                   validators=[InputRequired(),
+                                               NumberRange(min=0.01)])
+    reason = StringField('Reason', validators=[DataRequired(), Length(max=200)])
+    submit = SubmitField('Receive Stock')
 
 
 class InventoryAdjustmentForm(FlaskForm):

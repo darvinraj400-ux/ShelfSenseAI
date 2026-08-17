@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Notifications - ShelfSense AI{% endblock %}
+{% block content %}
+<h2 class="mb-3">Notifications</h2>
+
+{% if notifications %}
+  {% for n in notifications %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start">
+        <h6 class="mb-1">{{ n.title }}
+          {% if n.id in new_ids %}<span class="badge bg-primary ms-1">New</span>{% endif %}
+        </h6>
+        <small class="text-muted ms-3">{{ n.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+      </div>
+      <p class="mb-2 text-muted">{{ n.message }}</p>
+
+      {% if n.type == 'shop_invitation' %}
+        {% if n.invitation and n.invitation.status == 'pending' %}
+          <div class="d-flex gap-2">
+            <form method="POST" action="{{ url_for('accept_invitation_id', iid=n.invitation.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-success">Accept</button>
+            </form>
+            <form method="POST" action="{{ url_for('reject_invitation', iid=n.invitation.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-danger">Reject</button>
+            </form>
+          </div>
+        {% elif n.invitation %}
+          <span class="badge bg-secondary">Invitation {{ n.invitation.status }}</span>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+<div class="text-center py-5 text-muted">
+  <p>No notifications yet.</p>
+  {% if current_user.shop_id is none %}
+  <p class="small">Your account is not linked to a shop yet. When an Owner invites you,
+    the invitation will appear here for you to accept.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

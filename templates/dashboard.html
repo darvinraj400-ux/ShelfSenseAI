@@ -8,6 +8,13 @@
   {% endif %}
 </div>
 
+{% if unassigned %}
+<div class="alert alert-info">
+  Your account is not linked to a shop yet. If you received an invitation, accept it
+  from <a href="{{ url_for('notifications') }}">your notifications</a> (🔔).
+</div>
+{% endif %}
+
 {% if products %}
 <div class="table-responsive">
   <table class="table table-striped table-hover">
@@ -16,6 +23,7 @@
         <th>Product</th>
         <th>Brand</th>
         <th>Category</th>
+        <th>Size</th>
         <th>Cost Price</th>
         <th>Current Price</th>
         <th>Stock</th>
@@ -30,6 +38,7 @@
         <td>{{ p.name }}</td>
         <td>{{ p.brand or '—' }}</td>
         <td>{{ p.category or '—' }}</td>
+        <td class="text-muted">{{ p.size_label }}</td>
         <td>RM{{ "%.2f"|format(p.cost_price) }}</td>
         <td>{% if p.selling_price is not none %}RM{{ "%.2f"|format(p.selling_price) }}{% else %}—{% endif %}</td>
         <td>{% set inv = inv_map.get(p.id) %}{{ inv.current_stock|fmt_qty if inv else '—' }}</td>

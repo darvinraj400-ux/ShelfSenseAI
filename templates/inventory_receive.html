@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Receive Stock - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h3 class="mb-4">Receive Stock</h3>
+        <p class="mb-1"><strong>Product:</strong> {{ product.name }}</p>
+        <p class="text-muted">Product size:
+          <strong>{{ product.size_label }}</strong> (per package)</p>
+        <p class="text-muted">Current stock:
+          <strong>{{ inv.current_stock|fmt_qty if inv else '0' }}</strong></p>
+
+        <form method="POST">
+          {{ form.hidden_tag() }}
+
+          <div class="mb-3">
+            {{ form.quantity_received.label(class="form-label") }}
+            {{ form.quantity_received(class="form-control" + (" is-invalid" if form.quantity_received.errors else ""), placeholder="e.g. 10") }}
+            <div class="form-text">How many units arrived. Must be greater than 0.</div>
+            {% for error in form.quantity_received.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <div class="mb-3">
+            {{ form.reason.label(class="form-label") }}
+            {{ form.reason(class="form-control" + (" is-invalid" if form.reason.errors else ""), placeholder="e.g. New stock received") }}
+            {% for error in form.reason.errors %}
+              <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          {{ form.submit(class="btn btn-success") }}
+          <a href="{{ url_for('inventory') }}" class="btn btn-secondary ms-2">Cancel</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

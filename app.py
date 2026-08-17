@@ -43,9 +43,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 #   - Werkzeug: hashes passwords so we NEVER store plain-text passwords.
 
 from forms import (LoginForm, RegisterForm, ProductForm, SaleForm,
-                   InventoryAdjustmentForm, InviteForm, InviteAcceptForm)
+                   InventoryAdjustmentForm, ReceiveStockForm, InviteForm,
+                   InviteAcceptForm)
 #   - Our own WTForms definitions (email format, min password length, etc.)
-
 from flask_migrate import Migrate          # DB schema migration tool (like git for tables)
 from flask_wtf import CSRFProtect          # cross-site request forgery protection
 from flask_wtf.csrf import CSRFError       # the exception raised when a CSRF token is bad
@@ -53,7 +53,8 @@ from dotenv import load_dotenv             # reads our .env config file
 from datetime import datetime, timezone, timedelta  # timestamps + invitation expiry
 from functools import wraps                # used by our role_required() decorator
 from decimal import Decimal                # exact money/quantity arithmetic (no float noise)
-import secrets                            # cryptographically secure invitation tokens
+from sqlalchemy import func                # SQL functions (case-insensitive email matching)
+import secrets                             # cryptographically secure invitation tokens
 import os
 import pymysql                             # pure-Python MySQL driver
 
@@ -108,11 +109,13 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)  # never the raw password!
-    role = db.Column(db.String(20), nullable=False, default='staff')  # owner | manager | staff
-    shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=False)
-    #   - FK to shop.id. Public registration always creates a NEW shop and makes
-    #     the registrant its owner, so shop_id is always set. Future invitation
-    #     flow: an owner adds manager/staff to their EXISTING shop_id.
+    role = db.Column(db.String(20), nullable=False, default='staff')  # owner | manager | staff | unassigned
+    shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=True)
+    #   - FK to shop.id. NULL = an employee account that has NOT joined any
+    #     shop yet (created via the "Join an existing shop" registration path).
+    #     Shop registration creates a NEW shop and makes the registrant its
+    #     owner (shop_id set). Invitation acceptance later assigns the invited
+    #     employee's shop_id + role from the invitation row - never from a form.
     shop = db.relationship('Shop', backref='users')
     #   - `user.shop` -> the Shop object; `shop.users` -> this shop's team.
     #   - NOTE: no direct User->Product relationship any more. Products belong
@@ -185,6 +188,20 @@ class Product(db.Model):
         never go stale - no separate column to maintain."""
         return round(self.cost_price * (1 + self.target_margin / 100), 2)
 
+    @property
+    def size_label(self):
+        """Human-readable PACKAGE SIZE for display: quantity + unit
+        (e.g. '1 kg', '5 pcs', '2 L'). This is NOT stock - inventory stock
+        is shown separately as 'Current Stock'."""
+        parts = []
+        if self.quantity is not None:
+            v = float(self.quantity)
+            parts.append(str(int(v)) if v == int(v)
+                         else ('%g' % v).rstrip('0').rstrip('.'))
+        if self.unit:
+            parts.append(self.unit)
+        return ' '.join(parts) if parts else '—'
+
 
 # -------------------------------------------------
 # ShopInvitation - one row = an invitation to join a shop as manager/staff.
@@ -223,6 +240,33 @@ class ShopInvitation(db.Model):
         # MySQL DATETIME columns come back timezone-naive; compare against
         # naive UTC so the 48h lifetime is consistent.
         return self.expires_at < datetime.utcnow()
+
+
+# -------------------------------------------------
+# Notification - one row = an in-app notification for one user
+# (e.g. "ABC Mini Market invited you to join as Staff.").
+#   - Created when an invitation targets an account that ALREADY exists, and
+#     when an invited email later registers/logs in (sync_pending_invitations).
+#   - is_read flips when the user opens the notifications page.
+#   - type = 'shop_invitation' for now; the page renders Accept/Reject buttons
+#     for pending-invitation notifications.
+# -------------------------------------------------
+class Notification(db.Model):
+    __tablename__ = 'notification'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    type = db.Column(db.String(50), nullable=False)   # 'shop_invitation'
+    title = db.Column(db.String(120), nullable=False)  # 'Shop Invitation'
+    message = db.Column(db.String(255), nullable=False)  # 'X invited you to join as Staff.'
+    invitation_id = db.Column(db.Integer, db.ForeignKey('shop_invitation.id'),
+                              nullable=True)
+    #   - nullable: points at the invitation that caused this notification.
+    is_read = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime,
+                           default=lambda: datetime.now(timezone.utc))
+    user = db.relationship('User', backref='notifications')
+    invitation = db.relationship('ShopInvitation', backref='notifications')
+# -------------------------------------------------
 
 
 # -------------------------------------------------
@@ -307,19 +351,24 @@ class Inventory(db.Model):
 # No purchase orders / suppliers / warehouses / batches in this phase.
 # -------------------------------------------------
 class InventoryAdjustment(db.Model):
-    """One row per MANUAL stock adjustment. Sale-driven stock decreases are
-    NOT logged here - the sale row itself is the trace for those."""
+    """One row per MANUAL stock adjustment (receive / correction).
+    Sale-driven stock decreases are NOT logged here - the sale row itself is
+    the trace for those. quantity_change is positive for stock-in and
+    negative for stock-out; user_id records WHO made the change (audit)."""
     __tablename__ = 'inventory_adjustment'
     id = db.Column(db.Integer, primary_key=True)
     shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     quantity_change = db.Column(db.Numeric(10, 3), nullable=False)  # +20 / -5
     reason = db.Column(db.String(200), nullable=False)              # why the change happened
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    #   - who performed the adjustment (nullable: legacy rows have no user).
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     shop = db.relationship('Shop', backref='inventory_adjustments')
     product = db.relationship('Product',
                               backref=db.backref('inventory_adjustments',
                                                  cascade='all, delete-orphan'))
+    user = db.relationship('User', backref='inventory_adjustments')
 # -------------------------------------------------
 
 
@@ -376,6 +425,129 @@ class PriceCatcherItem(db.Model):
     unit          = db.Column(db.String(50))
     item_group    = db.Column(db.String(100))
     item_category = db.Column(db.String(100))
+# -------------------------------------------------
+
+
+# -------------------------------------------------
+# PHASE 3A - MARKET DATA FOUNDATION
+#
+# External market data (PriceCatcher, online retailers, manual entry)
+# lives in its OWN tables - it is NOT bolted onto the shop Product.
+# This keeps Product source-independent (a shop product stands alone
+# even when no market match exists). The two sides meet only through
+# ProductMarketMatch, a mapping table with a confidence score.
+#
+#   market_source  ->  market_item  ->  market_price_observation
+#                                             |
+#   product (shop) <------ ProductMarketMatch -+   (match table)
+# -------------------------------------------------
+
+
+class MarketSource(db.Model):
+    """A named source of market price data.
+    E.g. 'PriceCatcher' (government), 'Lotus Online' (online retailer),
+    or a manually-typed observation. source_type is one of:
+    government | online_retailer | manual."""
+    __tablename__ = 'market_source'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)          # e.g. 'PriceCatcher'
+    source_type = db.Column(db.Enum('government', 'online_retailer', 'manual'),
+                            nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    #   - is_active lets an import job be switched off without deleting rows.
+    items = db.relationship('MarketItem', backref='source')
+    #   - source.items -> the MarketItems scraped/imported from this source.
+
+
+class MarketItem(db.Model):
+    """ONE product listing from an external source (a row in that source's
+    catalogue). raw_title is exactly what the source said; normalized_title
+    is the cleaned form used for matching. package_quantity/package_unit
+    describe the size of one package (same convention as Product.quantity/
+    unit) - NEVER the stock of any shop."""
+    __tablename__ = 'market_item'
+    id = db.Column(db.Integer, primary_key=True)
+    source_id = db.Column(db.Integer, db.ForeignKey('market_source.id'),
+                          nullable=False)
+    external_id = db.Column(db.String(100), nullable=True)
+    #   - the source's own SKU / native id (PriceCatcher item_code, ...).
+    raw_title = db.Column(db.String(255), nullable=False)      # as published
+    normalized_title = db.Column(db.String(255), index=True)   # clean_text()
+    brand = db.Column(db.String(100), nullable=True)
+    category = db.Column(db.String(100), nullable=True)
+    package_quantity = db.Column(db.Numeric(10, 3), nullable=False)  # e.g. 1 / 500 / 2.5
+    package_unit = db.Column(db.String(20), nullable=False)          # e.g. kg / g / L / ml / pcs
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime,
+                           default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+    observations = db.relationship('MarketPriceObservation',
+                                   backref='market_item',
+                                   cascade='all, delete-orphan')
+    #   - deleting a MarketItem deletes its price observations too.
+
+
+class MarketPriceObservation(db.Model):
+    """ONE observed price for a MarketItem at a point in time.
+    effective_price is DERIVED on insert: promo_price when is_on_promo,
+    else regular_price - callers never pass it directly. normalized_unit_price
+    is the price per BASE unit (RM/kg, RM/L, RM/unit) computed with
+    utils.normalization.calculate_unit_price - the number that makes a
+    fair comparison across differently-sized packages possible."""
+    __tablename__ = 'market_price_observation'
+    id = db.Column(db.Integer, primary_key=True)
+    market_item_id = db.Column(db.Integer, db.ForeignKey('market_item.id'),
+                               nullable=False)
+    regular_price = db.Column(db.Numeric(10, 2), nullable=False)   # RM
+    promo_price = db.Column(db.Numeric(10, 2), nullable=True)      # RM (NULL = no promo)
+    is_on_promo = db.Column(db.Boolean, nullable=False, default=False)
+    effective_price = db.Column(db.Numeric(10, 2), nullable=False)  # derived, see __init__
+    normalized_unit_price = db.Column(db.Numeric(10, 4), nullable=False)  # RM per base unit
+    observed_at = db.Column(db.DateTime,
+                            default=lambda: datetime.now(timezone.utc),
+                            index=True)
+
+    def __init__(self, **kw):
+        # Derive effective_price: promo wins when the item is on promo.
+        if kw.get('effective_price') is None:
+            kw['effective_price'] = (kw.get('promo_price')
+                                     if kw.get('is_on_promo')
+                                     else kw.get('regular_price'))
+        # Derive normalized_unit_price from the linked MarketItem's package
+        # size when the caller did not supply one.
+        if kw.get('normalized_unit_price') is None:
+            mi = kw.get('market_item')
+            if mi is not None and mi.package_quantity:
+                from utils.normalization import calculate_unit_price
+                kw['normalized_unit_price'] = calculate_unit_price(
+                    float(kw['effective_price']),
+                    float(mi.package_quantity), mi.package_unit)
+        super().__init__(**kw)
+
+
+class ProductMarketMatch(db.Model):
+    """The ONLY bridge between a shop Product and a MarketItem.
+    A product may be matched to many market items (or none); a market
+    item may be matched to many shop products (each shop has its own).
+    confidence_score = how sure the matcher is (0.95 = 95%); match_type
+    is exact | fuzzy | manual; is_verified = shop owner confirmed it."""
+    __tablename__ = 'product_market_match'
+    __table_args__ = (db.UniqueConstraint('shop_product_id', 'market_item_id',
+                                          name='uq_product_market_match'),)
+    #   - a shop product can never link the same market item twice.
+    id = db.Column(db.Integer, primary_key=True)
+    shop_product_id = db.Column(db.Integer, db.ForeignKey('product.id'),
+                                nullable=False)
+    market_item_id = db.Column(db.Integer, db.ForeignKey('market_item.id'),
+                               nullable=False)
+    confidence_score = db.Column(db.Numeric(3, 2), nullable=True)  # 0.00 - 1.00
+    match_type = db.Column(db.Enum('exact', 'fuzzy', 'manual'), nullable=False)
+    is_verified = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    shop_product = db.relationship('Product',
+                                   backref=db.backref('market_matches',
+                                                      cascade='all, delete-orphan'))
+    market_item = db.relationship('MarketItem', backref='product_matches')
 # -------------------------------------------------
 
 
@@ -478,6 +650,55 @@ def fmt_qty(value):
 # -------------------------------------------------
 
 
+# ------------------------- NOTIFICATION HELPERS -------------------------
+def norm_email(email):
+    """Canonical email form: trimmed + lowercased. AHMAD@X.COM and ahmad@x.com
+    are the SAME identity - every lookup compares case-insensitively."""
+    return (email or '').strip().lower()
+
+
+def sync_pending_invitations(user):
+    """Surface every pending invitation targeting `user`'s email as an in-app
+    Notification. Idempotent (never duplicates) and lazily expires overdue
+    invitations. The CALLER must commit."""
+    email = norm_email(user.email)
+    pendings = (ShopInvitation.query
+                .filter(func.lower(ShopInvitation.email) == email,
+                        ShopInvitation.status == 'pending')
+                .all())
+    for inv in pendings:
+        if inv.is_expired:
+            inv.status = 'expired'
+            continue
+        already = Notification.query.filter_by(user_id=user.id,
+                                               invitation_id=inv.id).first()
+        if already is None:
+            db.session.add(Notification(
+                user_id=user.id,
+                type='shop_invitation',
+                title='Shop Invitation',
+                message=f'{inv.shop.name} invited you to join as '
+                        f'{inv.role.capitalize()}.',
+                invitation_id=inv.id))
+
+
+def mark_invitation_notifications_read(inv):
+    """Mark every notification linked to one invitation as read."""
+    for n in Notification.query.filter_by(invitation_id=inv.id).all():
+        n.is_read = True
+
+
+@app.context_processor
+def inject_unread_notifications():
+    """Expose the unread-notification count to every template so the navbar
+    can show a 🔔 badge (nothing when there are no unread notifications)."""
+    if current_user.is_authenticated:
+        return {'unread_notifications': Notification.query.filter_by(
+            user_id=current_user.id, is_read=False).count()}
+    return {'unread_notifications': 0}
+# -------------------------------------------------
+
+
 # ------------------------- ROUTES -------------------------
 # Each @app.route maps a URL to a Python function (a "view").
 
@@ -497,21 +718,36 @@ def register():
     if form.validate_on_submit():
         # validate_on_submit() = the browser sent a POST AND every WTForms
         # validator passed (valid email, password >= 6 chars, CSRF token OK).
-        if User.query.filter_by(email=form.email.data).first():
+        email = norm_email(form.email.data)   # AHMAD@X.COM == ahmad@x.com
+        if User.query.filter(func.lower(User.email) == email).first():
             flash('Email already registered', 'danger')
-        else:
-            # NEW SHOP-BASED FLOW: public registration always creates a brand
-            # new shop and the registrant becomes its OWNER. There is no public
-            # role dropdown - a stranger cannot register as the owner/manager
-            # of an existing shop (future invitations handle joining a shop).
+        elif form.account_type.data == 'shop':
+            # PATH A - CREATE A NEW SHOP: creates the shop AND the registrant
+            # as its OWNER. There is no public role dropdown - the owner role
+            # is derived from this path, never chosen.
             shop = Shop(name=form.shop_name.data)
             db.session.add(shop)
             db.session.flush()               # obtain shop.id for the new user
-            u = User(email=form.email.data, role='owner', shop_id=shop.id)
+            u = User(email=email, role='owner', shop_id=shop.id)
             u.set_password(form.password.data)   # hash the password before saving
             db.session.add(u)                    # queue the insert
             db.session.commit()                  # write shop + user to MySQL
-            flash('Registered! Please log in.', 'success')
+            flash('Shop created! Please log in.', 'success')
+            return redirect(url_for('login'))
+        else:
+            # PATH B - JOIN AN EXISTING SHOP (employee account): the account is
+            # created WITHOUT any shop membership (shop_id NULL, role
+            # 'unassigned'). The OWNER decides the final role via an invitation
+            # - the employee must explicitly ACCEPT it later. No shop is ever
+            # created here, and no role is taken from the form.
+            u = User(email=email, role='unassigned', shop_id=None)
+            u.set_password(form.password.data)   # hash the password before saving
+            db.session.add(u)
+            db.session.flush()               # obtain u.id for notifications
+            sync_pending_invitations(u)      # surface any existing pending invite
+            db.session.commit()
+            flash('Account created! If you have a pending invitation, accept it '
+                  'from the bell icon (Notifications).', 'success')
             return redirect(url_for('login'))
     return render_template('register.html', form=form)
 
@@ -524,10 +760,16 @@ def login():
 
     form = LoginForm()
     if form.validate_on_submit():
-        u = User.query.filter_by(email=form.email.data).first()
+        # Emails match case-insensitively (AHMAD@X.COM == ahmad@x.com).
+        u = User.query.filter(
+            func.lower(User.email) == norm_email(form.email.data)).first()
         if u and u.check_password(form.password.data):
             # check_password hashes the typed password and compares to the stored hash.
             login_user(u, remember=form.remember.data)   # remember = persistent cookie
+            # If an invitation was created for this email while the user was
+            # logged out (or before the account existed), surface it now.
+            sync_pending_invitations(u)
+            db.session.commit()
             # Safe next-page redirect (used by the invitation flow): only
             # allow same-site relative paths - never external URLs (open-
             # redirect protection).
@@ -549,6 +791,12 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    # Unassigned employee account ("Join an existing shop" path): no shop
+    # membership yet, so there is nothing to list - point them at their
+    # notifications where any pending invitation lives.
+    if current_user.shop_id is None:
+        return render_template('dashboard.html', products=[], inv_map={},
+                               unassigned=True)
     # DATA ISOLATION: products are owned by the SHOP, not the user. Every
     # member of a shop (owner/manager/staff) sees the SAME products; users
     # of other shops never see them. This filter is the whole security model.
@@ -775,7 +1023,13 @@ def inventory():
     inv_map = {i.product_id: i for i in
                Inventory.query.filter_by(shop_id=current_user.shop_id).all()}
     #   - DATA ISOLATION: only this shop's stock is ever shown.
-    return render_template('inventory.html', products=products, inv_map=inv_map)
+    #   - Recent manual stock movements (owner/manager audit trail).
+    movements = (InventoryAdjustment.query
+                 .filter_by(shop_id=current_user.shop_id)
+                 .order_by(InventoryAdjustment.created_at.desc())
+                 .limit(10).all())
+    return render_template('inventory.html', products=products,
+                           inv_map=inv_map, movements=movements)
 
 
 @app.route('/inventory/<int:pid>/adjust', methods=['GET', 'POST'])
@@ -813,12 +1067,59 @@ def adjust_inventory(pid):
         inv.current_stock = new_stock
         db.session.add(InventoryAdjustment(
             shop_id=current_user.shop_id, product_id=p.id,
-            quantity_change=change, reason=form.reason.data))
+            quantity_change=change, reason=form.reason.data,
+            user_id=current_user.id))
         db.session.commit()
         flash('Inventory adjusted.', 'success')
         return redirect(url_for('inventory'))
 
     return render_template('inventory_adjust.html', form=form, product=p, inv=inv)
+
+
+@app.route('/inventory/<int:pid>/receive', methods=['GET', 'POST'])
+@login_required
+@role_required('owner', 'manager')  # staff may VIEW stock but not receive it
+#   - Same rule as adjustments: stock is shop-level data, changed only by
+#     owner/manager. Staff record sales (which reduce stock) but never add.
+def receive_inventory(pid):
+    """RECEIVE STOCK: the obvious 'how do I add stock?' workflow.
+    Adds sellable units to a product's inventory. quantity_received must be
+    > 0 (server-validated); the increase + the InventoryAdjustment audit row
+    happen in ONE transaction - if either fails, both are rolled back."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        # SHOP OWNERSHIP CHECK - never trust the URL product id alone.
+        abort(403)
+
+    inv = Inventory.query.filter_by(product_id=p.id).first()
+    form = ReceiveStockForm()
+
+    if form.validate_on_submit():
+        qty = Decimal(str(form.quantity_received.data))
+        current = inv.current_stock if inv else Decimal('0')
+        # qty > 0 is guaranteed by ReceiveStockForm (InputRequired + NumberRange).
+        try:
+            # ONE transaction: bump stock + log the stock-in adjustment.
+            if inv is None:
+                inv = Inventory(shop_id=current_user.shop_id, product_id=p.id,
+                                current_stock=0, minimum_stock=0)
+                db.session.add(inv)
+            inv.current_stock = current + qty
+            db.session.add(InventoryAdjustment(
+                shop_id=current_user.shop_id, product_id=p.id,
+                quantity_change=qty, reason=form.reason.data,
+                user_id=current_user.id))
+            db.session.commit()
+            flash(f'Received {qty} unit(s). New stock: '
+                  f'{inv.current_stock}.', 'success')
+            return redirect(url_for('inventory'))
+        except Exception:
+            # Any failure rolls back BOTH the stock change and the audit row.
+            db.session.rollback()
+            flash('Failed to receive stock - no changes were saved.', 'danger')
+
+    return render_template('inventory_receive.html', form=form, product=p,
+                           inv=inv)
 
 
 # -------------------------------------------------
@@ -845,9 +1146,9 @@ def employees():
 
     form = InviteForm()
     if form.validate_on_submit():
-        email = form.email.data.strip().lower()
+        email = norm_email(form.email.data)
         role = form.role.data
-        existing = User.query.filter_by(email=email).first()
+        existing = User.query.filter(func.lower(User.email) == email).first()
         if existing and existing.shop_id == current_user.shop_id:
             flash(f'{email} is already a member of this shop.', 'warning')
         elif ShopInvitation.query.filter_by(shop_id=current_user.shop_id,
@@ -869,6 +1170,11 @@ def employees():
             )
             db.session.add(inv)
             db.session.commit()
+            # If the invitee already has an (unassigned) account, deliver the
+            # invitation as an in-app notification right away.
+            if existing is not None and existing.shop_id is None:
+                sync_pending_invitations(existing)
+                db.session.commit()
             link = url_for('accept_invitation', token=inv.token, _external=True)
             flash(f'Invitation created for {email} ({role}). '
                   f'Share this link with them: {link}', 'success')
@@ -896,13 +1202,99 @@ def revoke_invitation(iid):
     return redirect(url_for('employees'))
 
 
+@app.route('/notifications')
+@login_required
+def notifications():
+    """The in-app notification inbox. Surfacing any pending invitation that
+    arrived for this user, then marking everything read (unread = the 🔔
+    badge count shown before the page is opened)."""
+    sync_pending_invitations(current_user)
+    items = (Notification.query.filter_by(user_id=current_user.id)
+             .order_by(Notification.created_at.desc()).all())
+    # Keep track of which were still unread when the page was opened so the
+    # template can show a "NEW" badge before we flip them to read.
+    new_ids = {n.id for n in items if not n.is_read}
+    for n in items:
+        n.is_read = True
+    db.session.commit()
+    return render_template('notifications.html', notifications=items,
+                           new_ids=new_ids)
+
+
+@app.route('/invitations/<int:iid>/accept', methods=['POST'])
+@login_required
+def accept_invitation_id(iid):
+    """Employee accepts an invitation (from a notification or the accept page).
+    The invitation row is AUTHORITATIVE for shop_id + role - nothing is read
+    from the submitted form. The accept only succeeds for the exact account
+    the invitation was addressed to, and only when the invitation is pending,
+    unexpired and the user has no conflicting shop membership."""
+    inv = ShopInvitation.query.get_or_404(iid)
+    # 1. The invitation belongs to THIS user's email - never someone else's.
+    if norm_email(inv.email) != norm_email(current_user.email):
+        abort(403)
+    # 2. Lazily expire past-48h invitations.
+    if inv.status == 'pending' and inv.is_expired:
+        inv.status = 'expired'
+        db.session.commit()
+    # 3. Only a pending invitation can be accepted (no reuse).
+    if inv.status != 'pending':
+        flash('This invitation is no longer valid.', 'danger')
+        return redirect(url_for('notifications'))
+    # 4. Conflicting membership? Never move an existing user (incl. owners).
+    if current_user.shop_id is not None and current_user.shop_id != inv.shop_id:
+        flash('This account already belongs to another shop. The invitation '
+              'cannot be accepted and the account was not moved.', 'danger')
+        return redirect(url_for('dashboard'))
+    # 5. Already a member of the invited shop? Nothing to change.
+    if current_user.shop_id == inv.shop_id:
+        inv.status = 'accepted'
+        mark_invitation_notifications_read(inv)
+        db.session.commit()
+        flash('This account is already a member of the shop. '
+              'Invitation marked as accepted.', 'success')
+        return redirect(url_for('dashboard'))
+    # 6. Unassigned employee -> join the shop with the invitation's role.
+    current_user.shop_id = inv.shop_id
+    current_user.role = inv.role
+    inv.status = 'accepted'
+    mark_invitation_notifications_read(inv)
+    db.session.commit()
+    flash(f'Welcome to {inv.shop.name} as {inv.role.capitalize()}!', 'success')
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/invitations/<int:iid>/reject', methods=['POST'])
+@login_required
+def reject_invitation(iid):
+    """Employee DECLINES a pending invitation (status -> rejected, distinct
+    from owner-revoked). The invitation stays in the database for audit."""
+    inv = ShopInvitation.query.get_or_404(iid)
+    # Only the invited account may reject its own invitation.
+    if norm_email(inv.email) != norm_email(current_user.email):
+        abort(403)
+    if inv.status == 'pending' and inv.is_expired:
+        inv.status = 'expired'
+        db.session.commit()
+    if inv.status != 'pending':
+        flash('This invitation is no longer valid.', 'warning')
+        return redirect(url_for('notifications'))
+    inv.status = 'rejected'
+    mark_invitation_notifications_read(inv)
+    db.session.commit()
+    flash('Invitation declined.', 'success')
+    return redirect(url_for('notifications'))
+
+
 @app.route('/invite/accept/<token>', methods=['GET', 'POST'])
 def accept_invitation(token):
-    """Accept an invitation. The shop_id + role come ONLY from the invitation
-    row - never from the request. Three cases:
-      A) invited email has no account  -> registration form (email/role fixed)
-      B) invited email has an account  -> must log in as that account first
-      C) account already in this shop  -> accepted, nothing moved
+    """The shareable invitation link. The shop_id + role come ONLY from the
+    invitation row - never from the request.
+      A) invited email has NO account -> create an employee account (no shop
+         membership) and send the user to /notifications to EXPLICITLY accept.
+      B) invited email has an account -> must log in as that account; then the
+         page shows Accept/Reject buttons (or a clear message for same/different
+         shop cases).
     An existing account belonging to ANOTHER shop is rejected - it is never
     silently moved."""
     inv = ShopInvitation.query.filter_by(token=token).first()
@@ -916,13 +1308,14 @@ def accept_invitation(token):
         db.session.commit()
 
     if inv.status != 'pending':
-        # accepted / revoked / expired - the token cannot be reused.
+        # accepted / rejected / revoked / expired - the token cannot be reused.
         return render_template('invite_status.html', invitation=inv)
 
-    existing = User.query.filter_by(email=inv.email).first()
+    email = norm_email(inv.email)
+    existing = User.query.filter(func.lower(User.email) == email).first()
 
     if existing is not None:
-        # ---- Cases B & C: this email already has an account ----
+        # ---- This email already has an account ----
         if not (current_user.is_authenticated and current_user.id == existing.id):
             # Must authenticate AS the invited account - never move a
             # stranger's account. Send them to login and back to this link.
@@ -930,40 +1323,43 @@ def accept_invitation(token):
                   'to accept the invitation.', 'info')
             return redirect(url_for('login', next=request.path))
 
+        if existing.shop_id is not None and existing.shop_id != inv.shop_id:
+            # Belongs to ANOTHER shop (including an owner who owns their own
+            # shop). Reject - never silently move an existing user.
+            flash('This account already belongs to another shop. The invitation '
+                  'cannot be accepted and the account was not moved.', 'danger')
+            return redirect(url_for('dashboard'))
+
         if existing.shop_id == inv.shop_id:
-            # Case C: already a member - nothing to change, no duplicate user.
+            # Already a member - nothing to change, no duplicate user.
             inv.status = 'accepted'
+            mark_invitation_notifications_read(inv)
             db.session.commit()
             flash('This account is already a member of the shop. '
                   'Invitation marked as accepted.', 'success')
             return redirect(url_for('dashboard'))
 
-        # Case B: the account belongs to ANOTHER shop (including an owner who
-        # owns their own shop). Reject - never silently move an existing user.
-        flash('This account already belongs to another shop. The invitation '
-              'cannot be accepted and the account was not moved.', 'danger')
-        return redirect(url_for('dashboard'))
+        # Unassigned matching account -> explicit Accept/Reject on this page.
+        return render_template('invite_accept.html', form=None, invitation=inv,
+                               mode='summary')
 
-    # ---- Case A: invited email has no account yet - create it here -------
+    # ---- No account yet - create an EMPLOYEE account (Path B) -----------
+    # The account is created WITHOUT shop membership; the invitation stays
+    # pending and the employee must explicitly ACCEPT it from /notifications.
     form = InviteAcceptForm()
     if form.validate_on_submit():
-        u = User(email=inv.email, role=inv.role, shop_id=inv.shop_id)
-        #   - role + shop come from the invitation row, not the request.
+        u = User(email=email, role='unassigned', shop_id=None)
         u.set_password(form.password.data)
-        inv.status = 'accepted'
-        try:
-            db.session.add(u)
-            db.session.commit()   # single transaction: user + status together
-        except Exception:
-            # Any failure rolls back; the invitation stays usable (pending).
-            db.session.rollback()
-            flash('Could not complete the invitation - please try again.', 'danger')
-            return render_template('invite_accept.html', form=form,
-                                   invitation=inv)
-        login_user(u)             # straight into the new shop
-        flash(f'Welcome! You joined {inv.shop.name} as {inv.role}.', 'success')
-        return redirect(url_for('dashboard'))
-    return render_template('invite_accept.html', form=form, invitation=inv)
+        db.session.add(u)
+        db.session.flush()               # obtain u.id for the notification
+        sync_pending_invitations(u)      # surfaces THIS invitation as a notification
+        db.session.commit()
+        login_user(u)
+        flash(f'Account created! Accept your invitation to join '
+              f'{inv.shop.name} from your notifications.', 'success')
+        return redirect(url_for('notifications'))
+    return render_template('invite_accept.html', form=form, invitation=inv,
+                           mode='register')
 
 
 # ------------------------- ERROR HANDLERS -------------------------

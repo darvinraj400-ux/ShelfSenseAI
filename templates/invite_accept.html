@@ -14,7 +14,11 @@
           <li><strong>Role:</strong> {{ invitation.role|title }}</li>
         </ul>
 
-        <p class="text-muted">Create your account to accept:</p>
+        {% if form %}
+        {# ---- mode='register': create the employee account (no shop yet) ---- #}
+        <p class="text-muted">Create your account. It is created without shop
+          membership — after that you accept this invitation explicitly from
+          your notifications.</p>
         <form method="POST">
           {{ form.hidden_tag() }}
 
@@ -36,6 +40,21 @@
 
           {{ form.submit(class="btn btn-primary") }}
         </form>
+        {% else %}
+        {# ---- mode='summary': account exists & matches - explicit Accept/Reject ---- #}
+        <p class="text-muted">You are logged in as <strong>{{ current_user.email }}</strong>.
+          Accept to join this shop, or decline the invitation.</p>
+        <div class="d-flex gap-2">
+          <form method="POST" action="{{ url_for('accept_invitation_id', iid=invitation.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-success">Accept Invitation</button>
+          </form>
+          <form method="POST" action="{{ url_for('reject_invitation', iid=invitation.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-outline-danger">Reject</button>
+          </form>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>

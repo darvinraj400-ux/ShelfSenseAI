@@ -14,6 +14,10 @@
         <div class="alert alert-secondary">
           <strong>Revoked.</strong> This invitation was revoked by the shop owner.
         </div>
+        {% elif invitation.status == 'rejected' %}
+        <div class="alert alert-danger">
+          <strong>Declined.</strong> This invitation was declined by the invited employee.
+        </div>
         {% else %}
         <div class="alert alert-danger">
           <strong>Expired.</strong> This invitation has passed its 48-hour validity.
