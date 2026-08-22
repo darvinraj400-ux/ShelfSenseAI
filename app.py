@@ -559,6 +559,8 @@ class ProductMarketMatch(db.Model):
 # safely.
 from services.matching import apply_suggestions        # noqa: E402
 from services.market_analysis import get_market_stats   # noqa: E402
+from services.pricing_engine import (get_price_recommendation,  # noqa: E402
+                                     apply_price as _apply_price)
 
 
 # -------------------------------------------------
@@ -1056,9 +1058,11 @@ def product_detail(pid):
                .order_by(PriceHistory.created_at.desc()).limit(10).all())
     verified, suggested = _market_state(p)
     stats = get_market_stats(p.id)
+    pricing = get_price_recommendation(p.id)
     return render_template('product_detail.html', product=p, inventory=inv,
                            history=history, verified=verified,
                            suggested=suggested, stats=stats,
+                           pricing=pricing,
                            can_edit=current_user.can('owner', 'manager'))
 
 
@@ -1130,6 +1134,31 @@ def api_match_remove(mid):
     db.session.delete(m)
     db.session.commit()
     return _market_json(product)
+
+
+# -------------------------------------------------
+# PHASE 3E — PRICING RECOMMENDATION API
+# -------------------------------------------------
+@app.route('/api/product/<int:pid>/pricing', methods=['GET'])
+@login_required
+def api_pricing(pid):
+    """ML-powered price recommendation with guardrails."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    return jsonify(get_price_recommendation(pid))
+
+
+@app.route('/api/product/<int:pid>/apply-price', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_apply_price(pid):
+    """Apply the recommended price to the product's selling_price."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    new_price, msg = _apply_price(pid, current_user.id)
+    return jsonify({'new_price': new_price, 'message': msg})
 
 
 # -------------------------------------------------

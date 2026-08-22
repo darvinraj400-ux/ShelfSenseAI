@@ -25,3 +25,7 @@ pyarrow==25.0.0
 
 # --- Product matching (Phase 3C: services/matching.py) ---
 rapidfuzz==3.14.5
+
+# --- ML pricing engine (Phase 3E: services/pricing_engine.py) ---
+scikit-learn==1.9.0
+joblib==1.5.3

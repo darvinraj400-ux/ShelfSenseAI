@@ -22,5 +22,8 @@ instance/
 .DS_Store
 Thumbs.db
 
+# ML models (generated artifacts — retrain with scripts/train_pricing_model.py)
+ml/*.pkl
+
 # Logs
 *.log

@@ -19,6 +19,9 @@
   <li class="nav-item" role="presentation">
     <button class="nav-link" id="tab-btn-market" data-pane="market" type="button">📈 Market Intelligence</button>
   </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-btn-pricing" data-pane="pricing" type="button">💡 Pricing Recommendation</button>
+  </li>
 </ul>
 
 <style>
@@ -213,6 +216,96 @@
   </div>
 </div>
 
+<!-- ============ TAB: PRICING RECOMMENDATION ============ -->
+<div class="tab-pane" id="pane-pricing">
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">💡 AI Price Recommendation</h5>
+    <div id="pricing-body">
+      {% if pricing %}
+      <div class="row align-items-center mb-3">
+        <div class="col-md-4">
+          <small class="text-muted">Recommended Price</small><br>
+          <h3 class="text-primary mb-0">RM{{ "%.2f"|format(pricing.recommended_price) }}</h3>
+        </div>
+        <div class="col-md-3">
+          <small class="text-muted">Your Current Price</small><br>
+          <h5 class="mb-0">{% if pricing.current_price is not none %}RM{{ "%.2f"|format(pricing.current_price) }}{% else %}—{% endif %}</h5>
+        </div>
+        <div class="col-md-3">
+          <small class="text-muted">Difference</small><br>
+          {% if pricing.diff_pct is not none %}
+            {% if pricing.diff_pct > 0.5 %}
+              <span class="badge bg-warning text-dark">+{{ pricing.diff_pct }}% (below your price)</span>
+            {% elif pricing.diff_pct < -0.5 %}
+              <span class="badge bg-success">{{ pricing.diff_pct }}% (above your price)</span>
+            {% else %}
+              <span class="badge bg-secondary">≈ same as your price</span>
+            {% endif %}
+          {% else %}
+            <span class="badge bg-secondary">No current price set</span>
+          {% endif %}
+        </div>
+        <div class="col-md-2">
+          <small class="text-muted">Confidence</small><br>
+          {% if pricing.confidence == 'high' %}
+            <span class="badge bg-success">High ({% if pricing.confidence_score %}{{ "%.0f"|format(pricing.confidence_score * 100) }}%{% endif %})</span>
+          {% elif pricing.confidence == 'medium' %}
+            <span class="badge bg-warning text-dark">Medium ({% if pricing.confidence_score %}{{ "%.0f"|format(pricing.confidence_score * 100) }}%{% endif %})</span>
+          {% else %}
+            <span class="badge bg-secondary">Low ({% if pricing.confidence_score %}{{ "%.0f"|format(pricing.confidence_score * 100) }}%{% endif %})</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if can_edit %}
+      <div class="mb-3">
+        <button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>
+        <span class="text-muted ms-2" id="pricing-status"></span>
+      </div>
+      {% endif %}
+
+      {% if pricing.warnings %}
+      {% for w in pricing.warnings %}
+      <div class="alert alert-warning mb-2">{{ w }}</div>
+      {% endfor %}
+      {% endif %}
+
+      <small class="text-muted d-block">Cost floor: RM{{ "%.2f"|format(pricing.cost_floor) }} · Stock: {{ pricing.stock_level }} units · Velocity: ~{{ pricing.sales_velocity }}/day</small>
+      {% else %}
+      <p class="text-muted mb-0">Pricing recommendation unavailable.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Reasoning -->
+  {% if pricing and pricing.reasoning %}
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">📊 Why this price?</h5>
+    <ul class="mb-0">
+      {% for r in pricing.reasoning %}
+      <li>{{ r }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <!-- Feature Importances -->
+  {% if pricing and pricing.feature_importances %}
+  <div class="card p-4">
+    <h5 class="mb-3">🔧 Key Factors</h5>
+    {% for name, imp in pricing.feature_importances.items() %}
+    <div class="d-flex align-items-center mb-2">
+      <span style="min-width:160px">{{ name.replace('_', ' ').title() }}</span>
+      <div class="progress flex-grow-1" style="height:20px">
+        <div class="progress-bar bg-primary" style="width:{{ (imp * 100)|int }}%"></div>
+      </div>
+      <span class="ms-2" style="min-width:50px">{{ "%.0f"|format(imp * 100) }}%</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
 <script>
 (function () {
     'use strict';
@@ -374,6 +467,73 @@
         } catch (e) {
             status.textContent = 'Error: ' + e.message;
         }
+    });
+
+    // ---------- pricing recommendation tab ----------
+    function renderPricing(data) {
+        var el = document.getElementById('pricing-body');
+        if (!el) return;
+        if (!data || data.recommended_price === undefined) {
+            el.innerHTML = '<p class="text-muted mb-0">Pricing recommendation unavailable.</p>';
+            return;
+        }
+        var money = function(v) { return v === null || v === undefined ? '—' : 'RM' + Number(v).toFixed(2); };
+        var diffBadge = '';
+        if (data.diff_pct !== null && data.diff_pct !== undefined) {
+            if (data.diff_pct > 0.5) diffBadge = '<span class="badge bg-warning text-dark">+' + data.diff_pct + '% (below your price)</span>';
+            else if (data.diff_pct < -0.5) diffBadge = '<span class="badge bg-success">' + data.diff_pct + '% (above your price)</span>';
+            else diffBadge = '<span class="badge bg-secondary">≈ same as your price</span>';
+        } else {
+            diffBadge = '<span class="badge bg-secondary">No current price set</span>';
+        }
+        var confBadge = '';
+        if (data.confidence === 'high') confBadge = '<span class="badge bg-success">High (' + Math.round(data.confidence_score * 100) + '%)</span>';
+        else if (data.confidence === 'medium') confBadge = '<span class="badge bg-warning text-dark">Medium (' + Math.round(data.confidence_score * 100) + '%)</span>';
+        else confBadge = '<span class="badge bg-secondary">Low (' + Math.round(data.confidence_score * 100) + '%)</span>';
+        var warnings = (data.warnings || []).map(function(w) { return '<div class="alert alert-warning mb-2">' + esc(w) + '</div>'; }).join('');
+        var applyBtn = CAN_EDIT ? '<button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>' : '';
+        el.innerHTML =
+            '<div class="row align-items-center mb-3">' +
+            '<div class="col-md-4"><small class="text-muted">Recommended Price</small><br><h3 class="text-primary mb-0">' + money(data.recommended_price) + '</h3></div>' +
+            '<div class="col-md-3"><small class="text-muted">Your Current Price</small><br><h5 class="mb-0">' + money(data.current_price) + '</h5></div>' +
+            '<div class="col-md-3"><small class="text-muted">Difference</small><br>' + diffBadge + '</div>' +
+            '<div class="col-md-2"><small class="text-muted">Confidence</small><br>' + confBadge + '</div>' +
+            '</div>' +
+            '<div class="mb-3">' + applyBtn + ' <span class="text-muted ms-2" id="pricing-status"></span></div>' +
+            warnings +
+            '<small class="text-muted d-block">Cost floor: ' + money(data.cost_floor) + ' · Stock: ' + data.stock_level + ' units · Velocity: ~' + data.sales_velocity + '/day</small>';
+        // Rebind apply button
+        var applyBtnEl = document.getElementById('btn-apply-price');
+        if (applyBtnEl) {
+            applyBtnEl.addEventListener('click', async function () {
+                var status = document.getElementById('pricing-status');
+                status.textContent = 'Applying…';
+                applyBtnEl.disabled = true;
+                try {
+                    var resp = await api('/api/product/' + PRODUCT_ID + '/apply-price', 'POST');
+                    status.textContent = resp.message || 'Price updated!';
+                    // Refresh the page data
+                    window.location.reload();
+                } catch (e) {
+                    status.textContent = 'Error: ' + e.message;
+                } finally {
+                    applyBtnEl.disabled = false;
+                }
+            });
+        }
+    }
+
+    // Load pricing data on tab switch
+    var pricingLoaded = false;
+    document.querySelector('[data-pane="pricing"]').addEventListener('click', function () {
+        if (pricingLoaded) return;
+        pricingLoaded = true;
+        api('/api/product/' + PRODUCT_ID + '/pricing', 'GET').then(function (data) {
+            renderPricing(data);
+        }).catch(function (e) {
+            var el = document.getElementById('pricing-body');
+            if (el) el.innerHTML = '<p class="text-danger">Error loading pricing: ' + esc(e.message) + '</p>';
+        });
     });
 })();
 </script>
