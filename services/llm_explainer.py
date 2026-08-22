@@ -100,7 +100,7 @@ def _call_gemini(prompt):
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=[
             {"role": "user", "parts": [
                 {"text": SYSTEM_PROMPT},
