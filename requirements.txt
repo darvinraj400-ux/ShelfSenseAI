@@ -29,3 +29,6 @@ rapidfuzz==3.14.5
 # --- ML pricing engine (Phase 3E: services/pricing_engine.py) ---
 scikit-learn==1.9.0
 joblib==1.5.3
+
+# --- LLM explanations (Phase 3F: services/llm_explainer.py) ---
+google-genai==2.19.0

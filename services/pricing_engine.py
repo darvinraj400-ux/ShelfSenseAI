@@ -27,6 +27,7 @@ from app import (  # noqa: E402
     db, Product, Inventory, PriceHistory
 )
 from services.market_analysis import get_market_stats, _product_base_quantity  # noqa: E402
+from services.llm_explainer import generate_pricing_explanation  # noqa: E402
 from utils.normalization import normalize_package_size  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -351,6 +352,23 @@ def get_price_recommendation(product_id):
     if current_price and current_price > 0:
         diff_pct = round((ml_prediction / current_price - 1) * 100, 1)
 
+    # Phase 3F: generate natural-language explanation via Gemini
+    mkt_stats_payload = {
+        "n": market.get("n", 0),
+        "median": market.get("median"),
+        "min": market.get("min"),
+        "max": market.get("max"),
+    }
+    llm_payload = {
+        "recommended_price": ml_prediction,
+        "confidence": confidence,
+        "guardrails_applied": guardrails_applied,
+        "warnings": warnings_list,
+        "diff_pct": diff_pct,
+    }
+    llm_explanation = generate_pricing_explanation(
+        product, mkt_stats_payload, llm_payload)
+
     return {
         "recommended_price": ml_prediction,
         "original_prediction": original_prediction,
@@ -360,17 +378,13 @@ def get_price_recommendation(product_id):
         "warnings": warnings_list,
         "guardrails_applied": guardrails_applied,
         "feature_importances": importances,
-        "market_stats": {
-            "n": market.get("n", 0),
-            "median": market.get("median"),
-            "min": market.get("min"),
-            "max": market.get("max"),
-        },
+        "market_stats": mkt_stats_payload,
         "current_price": current_price,
         "diff_pct": diff_pct,
         "cost_floor": round(float(product.cost_price) * (1 + MIN_MARGIN_FLOOR), 2),
         "stock_level": stock_level,
         "sales_velocity": velocity,
+        "llm_explanation": llm_explanation,
     }
 
 

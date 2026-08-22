@@ -277,6 +277,14 @@
     </div>
   </div>
 
+  <!-- AI Assistant Insight (Phase 3F) -->
+  {% if pricing and pricing.llm_explanation %}
+  <div class="card p-4 mb-4 border-primary">
+    <h5 class="mb-2">🤖 AI Assistant Insight</h5>
+    <p class="mb-0" style="font-size:1.05em; line-height:1.6">{{ pricing.llm_explanation }}</p>
+  </div>
+  {% endif %}
+
   <!-- Reasoning -->
   {% if pricing and pricing.reasoning %}
   <div class="card p-4 mb-4">
@@ -491,6 +499,9 @@
         else if (data.confidence === 'medium') confBadge = '<span class="badge bg-warning text-dark">Medium (' + Math.round(data.confidence_score * 100) + '%)</span>';
         else confBadge = '<span class="badge bg-secondary">Low (' + Math.round(data.confidence_score * 100) + '%)</span>';
         var warnings = (data.warnings || []).map(function(w) { return '<div class="alert alert-warning mb-2">' + esc(w) + '</div>'; }).join('');
+        var llmBlock = data.llm_explanation
+            ? '<div class="card p-4 mb-4 border-primary"><h5 class="mb-2">🤖 AI Assistant Insight</h5><p class="mb-0" style="font-size:1.05em;line-height:1.6">' + esc(data.llm_explanation) + '</p></div>'
+            : '';
         var applyBtn = CAN_EDIT ? '<button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>' : '';
         el.innerHTML =
             '<div class="row align-items-center mb-3">' +
@@ -500,7 +511,7 @@
             '<div class="col-md-2"><small class="text-muted">Confidence</small><br>' + confBadge + '</div>' +
             '</div>' +
             '<div class="mb-3">' + applyBtn + ' <span class="text-muted ms-2" id="pricing-status"></span></div>' +
-            warnings +
+            warnings + llmBlock +
             '<small class="text-muted d-block">Cost floor: ' + money(data.cost_floor) + ' · Stock: ' + data.stock_level + ' units · Velocity: ~' + data.sales_velocity + '/day</small>';
         // Rebind apply button
         var applyBtnEl = document.getElementById('btn-apply-price');
