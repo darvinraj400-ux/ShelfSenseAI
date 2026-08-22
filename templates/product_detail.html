@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>{{ product.name }}</h2>
+  <div>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">← Back</a>
+    {% if can_edit %}
+    <a href="{{ url_for('edit_product', pid=product.id) }}" class="btn btn-outline-primary">Edit</a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs mb-3" id="productTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="tab-btn-details" data-pane="details" type="button">📋 Details</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-btn-market" data-pane="market" type="button">📈 Market Intelligence</button>
+  </li>
+</ul>
+
+<style>
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+</style>
+
+<!-- ===================== TAB: DETAILS ===================== -->
+<div class="tab-pane active" id="pane-details">
+  <div class="row">
+    <div class="col-md-7">
+      <div class="card p-4">
+        <table class="table mb-0">
+          <tbody>
+            <tr><th style="width:40%">Brand</th><td>{{ product.brand or '—' }}</td></tr>
+            <tr><th>Category</th><td>{{ product.category or '—' }}</td></tr>
+            <tr>
+              <th>Size (per package)</th>
+              <td>
+                {% if product.quantity is not none and product.unit %}
+                  {{ product.size_label }}
+                  <small class="text-muted">— the package size, <strong>not</strong> your stock</small>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+            <tr><th>Cost Price</th><td>RM{{ "%.2f"|format(product.cost_price) }}</td></tr>
+            <tr>
+              <th>Current Price</th>
+              <td>{% if product.selling_price is not none %}RM{{ "%.2f"|format(product.selling_price) }}{% else %}—{% endif %}</td>
+            </tr>
+            <tr>
+              <th>Suggested Price</th>
+              <td><strong>RM{{ "%.2f"|format(product.suggested_price) }}</strong>
+                  <small class="text-muted">(cost × {{ product.target_margin }}% margin)</small></td>
+            </tr>
+            <tr><th>Margin</th><td>{{ product.target_margin }}% {% if product.baseline_margin is not none %}<small class="text-muted">(baseline {{ product.baseline_margin }}%)</small>{% endif %}</td></tr>
+            <tr>
+              <th>Current Stock</th>
+              <td>{{ inventory.current_stock|fmt_qty if inventory else '—' }}
+                  <small class="text-muted">sellable units on hand</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="col-md-5">
+      <div class="card p-4">
+        <h5 class="mb-3">Price History <small class="text-muted">(last {{ history|length }})</small></h5>
+        {% if history %}
+        <table class="table table-sm table-striped mb-0">
+          <thead class="table-light">
+            <tr><th>Date</th><th>Cost</th><th>Price</th><th>Margin</th></tr>
+          </thead>
+          <tbody>
+            {% for h in history %}
+            <tr>
+              <td>{{ h.created_at.strftime('%d %b %y') }}</td>
+              <td>RM{{ "%.2f"|format(h.cost_price) }}</td>
+              <td>{% if h.selling_price is not none %}RM{{ "%.2f"|format(h.selling_price) }}{% else %}—{% endif %}</td>
+              <td>{{ h.target_margin }}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted mb-0">No price changes recorded yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= TAB: MARKET INTELLIGENCE ================= -->
+<div class="tab-pane" id="pane-market">
+  {% if can_edit %}
+  <div class="mb-3">
+    <button class="btn btn-primary" id="btn-search">🔍 Search market matches</button>
+    <span class="text-muted ms-2" id="match-status"></span>
+  </div>
+  {% endif %}
+
+  <!-- Market Summary Card (Phase 3D) -->
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">📊 Market Summary</h5>
+    <div id="stats-body">
+      {% if stats and stats.n > 0 %}
+      <div class="row g-3">
+        <div class="col-md-3">
+          <small class="text-muted">Market Range ({{ stats.n }} observations)</small><br>
+          <strong>RM{{ "%.2f"|format(stats.min) }} – RM{{ "%.2f"|format(stats.max) }}</strong>
+        </div>
+        <div class="col-md-2"><small class="text-muted">Median</small><br><strong>RM{{ "%.2f"|format(stats.median) }}</strong></div>
+        <div class="col-md-2"><small class="text-muted">Mean</small><br>RM{{ "%.2f"|format(stats.mean) }}</div>
+        <div class="col-md-2"><small class="text-muted">Spread</small><br>RM{{ "%.2f"|format(stats.spread) }}</div>
+        <div class="col-md-3">
+          <small class="text-muted">Your price vs median</small><br>
+          {% if stats.shop_price is not none and stats.comparison %}
+            {% if stats.comparison.at_median %}
+              <span class="badge bg-secondary">RM{{ "%.2f"|format(stats.shop_price) }} — at market median</span>
+            {% elif stats.comparison.above %}
+              <span class="badge bg-warning text-dark">RM{{ "%.2f"|format(stats.shop_price) }} · +{{ stats.comparison.pct }}% above median</span>
+            {% else %}
+              <span class="badge bg-success">RM{{ "%.2f"|format(stats.shop_price) }} · −{{ stats.comparison.pct }}% below median</span>
+            {% endif %}
+          {% else %}
+            <span class="badge bg-secondary">Set a selling price to compare</span>
+          {% endif %}
+        </div>
+      </div>
+      <small class="text-muted d-block mt-2">{{ stats.scaling_note }}</small>
+      {% else %}
+      <p class="text-muted mb-0">No verified market data yet — verify a suggestion above to see the market summary.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Verified links -->
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">✅ Verified Market Links</h5>
+    <div id="verified-list">
+      {% if verified %}
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>Market Item</th><th>Package</th><th>Category</th><th>Market Price (RM)</th><th>Per Unit</th><th class="text-end">Action</th></tr>
+        </thead>
+        <tbody>
+          {% for v in verified %}
+          <tr data-mid="{{ v.match_id }}">
+            <td>
+              <strong>{{ v.item.raw_title }}</strong><br>
+              <small class="text-muted">{{ v.item.source.name if v.item.source else '' }}{% if v.confidence is not none %} · {{ "%.0f"|format(v.confidence * 100) }}%{% endif %}</small>
+            </td>
+            <td>{{ v.item.package_quantity|fmt_qty if v.item.package_quantity is not none else '' }} {{ v.item.package_unit }}</td>
+            <td>{{ v.item.category or '—' }}</td>
+            <td>
+              {% if v.summary %}
+                latest <strong>RM{{ "%.2f"|format(v.summary.latest) }}</strong>
+                <small class="text-muted">({{ v.summary.min }}–{{ v.summary.max }}, avg {{ v.summary.avg }}, {{ v.summary.count }} obs)</small>
+              {% else %}—{% endif %}
+            </td>
+            <td>{% if v.summary %}RM{{ "%.2f"|format(v.summary.unit_price) }}{% else %}—{% endif %}</td>
+            <td class="text-end">
+              {% if can_edit %}<button class="btn btn-sm btn-outline-danger action-btn" data-action="remove" data-mid="{{ v.match_id }}">Remove</button>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted mb-0">No verified market links yet — confirm a suggestion below to anchor this product to real market data.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Suggested links -->
+  <div class="card p-4">
+    <h5 class="mb-3">💡 Suggested Matches</h5>
+    <div id="suggested-list">
+      {% if suggested %}
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>Market Item</th><th>Package</th><th>Category</th><th>Confidence</th><th class="text-end">Action</th></tr>
+        </thead>
+        <tbody>
+          {% for s in suggested %}
+          <tr data-mid="{{ s.match_id }}">
+            <td>
+              <strong>{{ s.item.raw_title }}</strong><br>
+              <small class="text-muted">{{ s.item.source.name if s.item.source else '' }} · {{ s.match_type }}</small>
+            </td>
+            <td>{{ s.item.package_quantity|fmt_qty if s.item.package_quantity is not none else '' }} {{ s.item.package_unit }}</td>
+            <td>{{ s.item.category or '—' }}</td>
+            <td>
+              <span class="badge {% if s.confidence is not none and s.confidence >= 0.8 %}bg-success{% elif s.confidence is not none and s.confidence >= 0.65 %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                {% if s.confidence is not none %}{{ "%.0f"|format(s.confidence * 100) }}%{% else %}—{% endif %}
+              </span>
+            </td>
+            <td class="text-end">
+              {% if can_edit %}
+              <button class="btn btn-sm btn-outline-success action-btn" data-action="verify" data-mid="{{ s.match_id }}">Verify</button>
+              <button class="btn btn-sm btn-outline-secondary action-btn" data-action="reject" data-mid="{{ s.match_id }}">Reject</button>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted mb-0">No suggestions yet.{% if can_edit %} Click “Search market matches” to find candidates.{% endif %}</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+    const PRODUCT_ID = {{ product.id }};
+    const CAN_EDIT = {{ 'true' if can_edit else 'false' }};
+    const CSRF = '{{ csrf_token() }}';
+
+    // ---------- tab switching ----------
+    document.querySelectorAll('#productTabs .nav-link').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('#productTabs .nav-link').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            document.getElementById('pane-' + btn.dataset.pane).classList.add('active');
+        });
+    });
+
+    // ---------- API helper ----------
+    async function api(url, method) {
+        const resp = await fetch(url, {
+            method: method,
+            headers: { 'X-CSRFToken': CSRF }
+        });
+        let data = {};
+        try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
+        if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        return data;
+    }
+
+    function fmtConf(c) { return c === null || c === undefined ? '—' : Math.round(c * 100) + '%'; }
+    function pkgBadge(row) { return (row.package || '').trim(); }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    function renderVerified(list) {
+        const el = document.getElementById('verified-list');
+        if (!list.length) {
+            el.innerHTML = '<p class="text-muted mb-0">No verified market links yet — confirm a suggestion below to anchor this product to real market data.</p>';
+            return;
+        }
+        let html = '<table class="table table-sm align-middle mb-0"><thead class="table-light">' +
+            '<tr><th>Market Item</th><th>Package</th><th>Category</th><th>Market Price (RM)</th><th>Per Unit</th><th class="text-end">Action</th></tr>' +
+            '</thead><tbody>';
+        list.forEach(function (v) {
+            const s = v.summary;
+            const price = s
+                ? 'latest <strong>RM' + s.latest.toFixed(2) + '</strong> <small class="text-muted">(' + s.min.toFixed(2) +
+                  '–' + s.max.toFixed(2) + ', avg ' + s.avg.toFixed(2) + ', ' + s.count + ' obs)</small>'
+                : '—';
+            html += '<tr data-mid="' + v.match_id + '">' +
+                '<td><strong>' + esc(v.title) + '</strong><br><small class="text-muted">' + esc(v.source || '') + ' · ' + fmtConf(v.confidence) + '</small></td>' +
+                '<td>' + esc(pkgBadge(v)) + '</td>' +
+                '<td>' + esc(v.category || '—') + '</td>' +
+                '<td>' + price + '</td>' +
+                '<td>' + (s ? 'RM' + s.unit_price.toFixed(2) : '—') + '</td>' +
+                '<td class="text-end">' + (CAN_EDIT ? '<button class="btn btn-sm btn-outline-danger action-btn" data-action="remove" data-mid="' + v.match_id + '">Remove</button>' : '') + '</td>' +
+                '</tr>';
+        });
+        el.innerHTML = html + '</tbody></table>';
+    }
+
+    function renderSuggested(list) {
+        const el = document.getElementById('suggested-list');
+        if (!list.length) {
+            el.innerHTML = '<p class="text-muted mb-0">No suggestions yet.' + (CAN_EDIT ? ' Click “Search market matches” to find candidates.' : '') + '</p>';
+            return;
+        }
+        let html = '<table class="table table-sm align-middle mb-0"><thead class="table-light">' +
+            '<tr><th>Market Item</th><th>Package</th><th>Category</th><th>Confidence</th><th class="text-end">Action</th></tr>' +
+            '</thead><tbody>';
+        list.forEach(function (s) {
+            const cls = s.confidence !== null && s.confidence !== undefined && s.confidence >= 0.8 ? 'bg-success'
+                      : (s.confidence !== null && s.confidence !== undefined && s.confidence >= 0.65 ? 'bg-warning text-dark' : 'bg-secondary');
+            html += '<tr data-mid="' + s.match_id + '">' +
+                '<td><strong>' + esc(s.title) + '</strong><br><small class="text-muted">' + esc(s.source || '') + ' · ' + esc(s.match_type) + '</small></td>' +
+                '<td>' + esc(pkgBadge(s)) + '</td>' +
+                '<td>' + esc(s.category || '—') + '</td>' +
+                '<td><span class="badge ' + cls + '">' + fmtConf(s.confidence) + '</span></td>' +
+                '<td class="text-end">' + (CAN_EDIT
+                    ? '<button class="btn btn-sm btn-outline-success action-btn" data-action="verify" data-mid="' + s.match_id + '">Verify</button> ' +
+                      '<button class="btn btn-sm btn-outline-secondary action-btn" data-action="reject" data-mid="' + s.match_id + '">Reject</button>'
+                    : '') + '</td>' +
+                '</tr>';
+        });
+        el.innerHTML = html + '</tbody></table>';
+    }
+
+    function renderStats(stats) {
+        const el = document.getElementById('stats-body');
+        if (!el) return;
+        if (!stats || !stats.n) {
+            el.innerHTML = '<p class="text-muted mb-0">No verified market data yet — verify a suggestion above to see the market summary.</p>';
+            return;
+        }
+        const money = v => 'RM' + Number(v).toFixed(2);
+        let badge;
+        if (stats.shop_price != null && stats.comparison) {
+            if (stats.comparison.at_median) {
+                badge = '<span class="badge bg-secondary">' + money(stats.shop_price) + ' — at market median</span>';
+            } else if (stats.comparison.above) {
+                badge = '<span class="badge bg-warning text-dark">' + money(stats.shop_price) + ' · +' + stats.comparison.pct + '% above median</span>';
+            } else {
+                badge = '<span class="badge bg-success">' + money(stats.shop_price) + ' · −' + stats.comparison.pct + '% below median</span>';
+            }
+        } else {
+            badge = '<span class="badge bg-secondary">Set a selling price to compare</span>';
+        }
+        el.innerHTML =
+            '<div class="row g-3">' +
+            '<div class="col-md-3"><small class="text-muted">Market Range (' + stats.n + ' observations)</small><br><strong>' +
+                money(stats.min) + ' – ' + money(stats.max) + '</strong></div>' +
+            '<div class="col-md-2"><small class="text-muted">Median</small><br><strong>' + money(stats.median) + '</strong></div>' +
+            '<div class="col-md-2"><small class="text-muted">Mean</small><br>' + money(stats.mean) + '</div>' +
+            '<div class="col-md-2"><small class="text-muted">Spread</small><br>' + money(stats.spread) + '</div>' +
+            '<div class="col-md-3"><small class="text-muted">Your price vs median</small><br>' + badge + '</div>' +
+            '</div>' +
+            '<small class="text-muted d-block mt-2">' + esc(stats.scaling_note || '') + '</small>';
+    }
+
+    function applyState(data) {
+        renderVerified(data.verified || []);
+        renderSuggested(data.suggested || []);
+        renderStats(data.stats);
+    }
+
+    // ---------- search button ----------
+    const btn = document.getElementById('btn-search');
+    if (btn) {
+        btn.addEventListener('click', async function () {
+            const status = document.getElementById('match-status');
+            status.textContent = 'Searching…';
+            btn.disabled = true;
+            try {
+                const data = await api('/api/product/' + PRODUCT_ID + '/match', 'POST');
+                applyState(data);
+                const n = (data.suggested || []).length;
+                status.textContent = n ? 'Found ' + n + ' suggestion' + (n === 1 ? '' : 's') + '.' : 'No matches found.';
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
+    // ---------- verify / reject / remove (event delegation) ----------
+    document.addEventListener('click', async function (ev) {
+        const btn = ev.target.closest('.action-btn');
+        if (!btn) return;
+        const mid = btn.dataset.mid;
+        const action = btn.dataset.action;
+        const status = document.getElementById('match-status');
+        const url = action === 'remove'
+            ? '/api/market-match/' + mid
+            : '/api/market-match/' + mid + '/' + action;
+        try {
+            const data = await api(url, action === 'remove' ? 'DELETE' : 'POST');
+            applyState(data);
+            status.textContent = action === 'verify' ? 'Verified.' : (action === 'reject' ? 'Rejected.' : 'Removed.');
+        } catch (e) {
+            status.textContent = 'Error: ' + e.message;
+        }
+    });
+})();
+</script>
+{% endblock %}

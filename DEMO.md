@@ -72,6 +72,12 @@ Everything below is verified working against the live system.
   ignored, and an account that already belongs to another shop can never be
   moved. Invitations expire after 48h, can be revoked by the Owner, and a
   declined invitation shows as **Declined** (distinct from revoked).
+- **Remove employee:** the Owner can remove a Manager/Staff member from the
+  team table (Remove button). The account is kept but **unassigned**
+  (shop_id → NULL, role → unassigned) — the same state a fresh "Join an
+  existing shop" account starts in — so the person can be re-invited later.
+  The Owner can never remove themselves or another owner; the removed
+  employee gets an in-app notification about the removal.
 
 ### 1.6 Sales & Inventory (Phase 2B)
 - The navbar now has **Products / Sales / Inventory**.

@@ -18,6 +18,7 @@
                 <th>Email</th>
                 <th>Role</th>
                 <th>Status</th>
+                <th class="text-end">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -26,6 +27,19 @@
                 <td>{{ u.email }}</td>
                 <td>{{ u.role|title }}</td>
                 <td><span class="badge bg-success">Active</span></td>
+                <td class="text-end">
+                  {% if u.id == current_user.id %}
+                  <span class="text-muted">—</span>
+                  {% elif u.role == 'owner' %}
+                  <span class="text-muted">—</span>
+                  {% else %}
+                  <form method="POST" action="{{ url_for('remove_employee', uid=u.id) }}" class="d-inline"
+                        onsubmit="return confirm('Remove {{ u.email }} from this shop? Their account is kept but unlinked — they can be re-invited later.')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-sm btn-outline-danger">Remove</button>
+                  </form>
+                  {% endif %}
+                </td>
               </tr>
               {% endfor %}
             </tbody>

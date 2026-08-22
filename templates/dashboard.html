@@ -35,7 +35,7 @@
     <tbody>
       {% for p in products %}
       <tr>
-        <td>{{ p.name }}</td>
+        <td><a href="{{ url_for('product_detail', pid=p.id) }}">{{ p.name }}</a></td>
         <td>{{ p.brand or '—' }}</td>
         <td>{{ p.category or '—' }}</td>
         <td class="text-muted">{{ p.size_label }}</td>

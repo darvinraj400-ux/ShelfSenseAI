@@ -22,3 +22,6 @@ python-dotenv==1.2.2
 # --- PriceCatcher data import (import_pricecatcher.py) ---
 pandas==3.0.5
 pyarrow==25.0.0
+
+# --- Product matching (Phase 3C: services/matching.py) ---
+rapidfuzz==3.14.5

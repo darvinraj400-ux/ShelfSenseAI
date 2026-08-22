@@ -543,12 +543,22 @@ class ProductMarketMatch(db.Model):
     confidence_score = db.Column(db.Numeric(3, 2), nullable=True)  # 0.00 - 1.00
     match_type = db.Column(db.Enum('exact', 'fuzzy', 'manual'), nullable=False)
     is_verified = db.Column(db.Boolean, nullable=False, default=False)
+    #   - True only after the SHOP OWNER/MANAGER explicitly confirms the link.
+    is_rejected = db.Column(db.Boolean, nullable=False, default=False)
+    #   - True after the user rejected a suggestion, so it never reappears.
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     shop_product = db.relationship('Product',
                                    backref=db.backref('market_matches',
                                                       cascade='all, delete-orphan'))
     market_item = db.relationship('MarketItem', backref='product_matches')
 # -------------------------------------------------
+
+# Phase 3C/3D services. Imported HERE (not at the top of the file)
+# because they import `app` back - at this point the module has fully
+# defined db + every model they need, so the circular import resolves
+# safely.
+from services.matching import apply_suggestions        # noqa: E402
+from services.market_analysis import get_market_stats   # noqa: E402
 
 
 # -------------------------------------------------
@@ -846,6 +856,11 @@ def new_product():
             current_stock=0,
             minimum_stock=0
         ))
+        # Phase 3C: auto-suggest market matches right after creation so the
+        # new product's Market Intelligence tab has candidates immediately.
+        # Suggestions are ALWAYS unverified - only the owner/manager can
+        # confirm them. Synchronous because the catalogue is ~400 items.
+        apply_suggestions(p)
         db.session.commit()
         flash('Product added!', 'success')
         return redirect(url_for('dashboard'))
@@ -909,6 +924,11 @@ def edit_product(pid):
                 'warning'
             )
 
+        # Phase 3C: refresh market suggestions when the product is edited
+        # (name/package/category may have changed). Verified and rejected
+        # links are preserved - only stale suggestions refresh.
+        apply_suggestions(p)
+
         db.session.commit()
         flash('Product updated!', 'success')
         return redirect(url_for('dashboard'))
@@ -939,6 +959,177 @@ def delete_product(pid):
     db.session.commit()
     flash('Product deleted', 'success')
     return redirect(url_for('dashboard'))
+
+
+# -------------------------------------------------
+# PHASE 3C - PRODUCT DETAIL PAGE + MARKET INTELLIGENCE API
+# -------------------------------------------------
+def _market_state(product):
+    """(verified, suggested) display dicts for a product's match tab.
+    Each dict carries the ProductMarketMatch row, its MarketItem, and
+    (for verified links) a market-price summary from the observations."""
+    def obs_summary(mi):
+        rows = (MarketPriceObservation.query
+                .filter_by(market_item_id=mi.id)
+                .order_by(MarketPriceObservation.observed_at.asc()).all())
+        if not rows:
+            return None
+        prices = [float(r.regular_price) for r in rows]
+        return {
+            'latest': round(prices[-1], 2),
+            'min': round(min(prices), 2),
+            'max': round(max(prices), 2),
+            'avg': round(sum(prices) / len(prices), 2),
+            'unit_price': float(rows[-1].normalized_unit_price),
+            'count': len(rows),
+            'first_date': rows[0].observed_at.date().isoformat(),
+            'last_date': rows[-1].observed_at.date().isoformat(),
+        }
+
+    verified, suggested = [], []
+    for m in product.market_matches:
+        if m.is_verified:
+            verified.append({'match_id': m.id, 'item': m.market_item,
+                             'confidence': m.confidence_score,
+                             'match_type': m.match_type, 'verified': True,
+                             'summary': obs_summary(m.market_item)})
+        elif not m.is_rejected:
+            suggested.append({'match_id': m.id, 'item': m.market_item,
+                              'confidence': m.confidence_score,
+                              'match_type': m.match_type, 'verified': False,
+                              'summary': None})
+    suggested.sort(key=lambda s: float(s['confidence'] or 0), reverse=True)
+    return verified, suggested
+
+
+def _serialize_match(s):
+    """Convert a _market_state() dict into a JSON-safe dict for the API."""
+    it = s['item']
+    qty = float(it.package_quantity)
+    pkg = f"{str(int(qty)) if qty == int(qty) else ('%g' % qty).rstrip('0').rstrip('.')} {it.package_unit}".strip()
+    return {
+        'match_id': s['match_id'],
+        'market_item_id': it.id,
+        'title': it.raw_title,
+        'package': pkg,
+        'category': it.category,
+        'source': it.source.name if it.source else None,
+        'confidence': (float(s['confidence'])
+                       if s['confidence'] is not None else None),
+        'match_type': s['match_type'],
+        'verified': s['verified'],
+        'summary': s['summary'],
+    }
+
+
+def _market_json(product):
+    """JSON payload of a product's full match state (verified + suggested)
+    plus the Phase 3D market statistics - so the frontend can refresh the
+    Market Summary card after every verify/reject/remove/search action."""
+    verified, suggested = _market_state(product)
+    return jsonify({'verified': [_serialize_match(s) for s in verified],
+                    'suggested': [_serialize_match(s) for s in suggested],
+                    'stats': get_market_stats(product.id)})
+
+
+@app.route('/api/product/<int:pid>/market-stats', methods=['GET'])
+@login_required
+def api_product_market_stats(pid):
+    """Phase 3D: market statistics for a product's verified matches.
+    All shop roles can read; cross-shop is blocked like every other route."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    return jsonify(get_market_stats(p.id))
+
+
+@app.route('/product/<int:pid>')
+@login_required
+def product_detail(pid):
+    """Product details + Market Intelligence hub (all shop roles can view)."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        # SHOP OWNERSHIP CHECK: never trust the URL product id alone.
+        abort(403)
+    inv = Inventory.query.filter_by(product_id=p.id).first()
+    history = (PriceHistory.query.filter_by(product_id=p.id)
+               .order_by(PriceHistory.created_at.desc()).limit(10).all())
+    verified, suggested = _market_state(p)
+    stats = get_market_stats(p.id)
+    return render_template('product_detail.html', product=p, inventory=inv,
+                           history=history, verified=verified,
+                           suggested=suggested, stats=stats,
+                           can_edit=current_user.can('owner', 'manager'))
+
+
+def _get_own_match(mid):
+    """Fetch a match row + its product, enforcing shop isolation."""
+    m = ProductMarketMatch.query.get_or_404(mid)
+    if m.shop_product.shop_id != current_user.shop_id:
+        abort(403)
+    return m, m.shop_product
+
+
+@app.route('/api/product/<int:pid>/market', methods=['GET'])
+@login_required
+def api_product_market(pid):
+    """Current match state for the Market Intelligence tab (all roles)."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    return _market_json(p)
+
+
+@app.route('/api/product/<int:pid>/match', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_product_match(pid):
+    """(Re)run matching for one product and return the refreshed state."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    created = apply_suggestions(p)
+    db.session.commit()
+    db.session.expire(p, ['market_matches'])   # reload the refreshed rows
+    return _market_json(p)
+
+
+@app.route('/api/market-match/<int:mid>/verify', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_match_verify(mid):
+    """Confirm a suggestion: is_verified=True, match_type='manual'."""
+    m, product = _get_own_match(mid)
+    if m.is_rejected:
+        return jsonify({'error': 'Cannot verify a rejected suggestion.'}), 400
+    m.is_verified = True
+    m.match_type = 'manual'       # confirmed by a human = manual link
+    db.session.commit()
+    return _market_json(product)
+
+
+@app.route('/api/market-match/<int:mid>/reject', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_match_reject(mid):
+    """Permanently hide a suggestion (is_rejected=True, never reappears)."""
+    m, product = _get_own_match(mid)
+    if m.is_verified:
+        return jsonify({'error': 'Verified links are removed, not rejected.'}), 400
+    m.is_rejected = True
+    db.session.commit()
+    return _market_json(product)
+
+
+@app.route('/api/market-match/<int:mid>', methods=['DELETE'])
+@login_required
+@role_required('owner', 'manager')
+def api_match_remove(mid):
+    """Remove a verified link (the row itself is deleted)."""
+    m, product = _get_own_match(mid)
+    db.session.delete(m)
+    db.session.commit()
+    return _market_json(product)
 
 
 # -------------------------------------------------
@@ -1199,6 +1390,49 @@ def revoke_invitation(iid):
         flash('Invitation revoked.', 'success')
     else:
         flash('Only pending invitations can be revoked.', 'warning')
+    return redirect(url_for('employees'))
+
+
+@app.route('/employees/<int:uid>/remove', methods=['POST'])
+@login_required
+@role_required('owner')
+def remove_employee(uid):
+    """Owner removes a manager/staff member from the shop.
+
+    The employee's ACCOUNT is KEPT - it is only unassigned (shop_id -> NULL,
+    role -> 'unassigned'), the same state a fresh "Join an existing shop"
+    account starts in. The row is never deleted because the account is needed
+    for login / notifications / re-invitation, and rows like
+    inventory_adjustment.user_id reference it. After removal the owner can
+    invite the same email again (the invite-time guard only blocks current
+    members of the shop).
+
+    Safety rules: the owner cannot remove themselves, cannot remove another
+    owner, and can only touch users of their OWN shop."""
+    target = User.query.get_or_404(uid)
+    if target.shop_id != current_user.shop_id:
+        # SHOP OWNERSHIP CHECK - never trust the URL id alone.
+        abort(403)
+    if target.id == current_user.id:
+        flash('You cannot remove yourself — you are the shop owner.', 'warning')
+        return redirect(url_for('employees'))
+    if target.role == 'owner':
+        flash('Shop owners cannot be removed by another user.', 'warning')
+        return redirect(url_for('employees'))
+
+    shop_name = current_user.shop.name if current_user.shop else 'the shop'
+    target.shop_id = None
+    target.role = 'unassigned'
+    # Tell the employee (their notifications page renders non-invitation
+    # types as plain messages).
+    db.session.add(Notification(
+        user_id=target.id,
+        type='shop_membership',
+        title='Removed from shop',
+        message=f'You have been removed from {shop_name} by the shop owner.',
+    ))
+    db.session.commit()
+    flash(f'{target.email} has been removed from the shop.', 'success')
     return redirect(url_for('employees'))
 
 
