@@ -561,6 +561,7 @@ from services.matching import apply_suggestions        # noqa: E402
 from services.market_analysis import get_market_stats   # noqa: E402
 from services.pricing_engine import (get_price_recommendation,  # noqa: E402
                                      apply_price as _apply_price)
+from services.dashboard_service import get_dashboard_metrics  # noqa: E402
 
 
 # -------------------------------------------------
@@ -808,7 +809,7 @@ def dashboard():
     # notifications where any pending invitation lives.
     if current_user.shop_id is None:
         return render_template('dashboard.html', products=[], inv_map={},
-                               unassigned=True)
+                               unassigned=True, metrics=None)
     # DATA ISOLATION: products are owned by the SHOP, not the user. Every
     # member of a shop (owner/manager/staff) sees the SAME products; users
     # of other shops never see them. This filter is the whole security model.
@@ -816,7 +817,10 @@ def dashboard():
     # Map product_id -> inventory row so the table can show current stock.
     inv_map = {i.product_id: i for i in
                Inventory.query.filter_by(shop_id=current_user.shop_id).all()}
-    return render_template('dashboard.html', products=products, inv_map=inv_map)
+    # Phase 4A: compute dashboard metrics and action items
+    metrics = get_dashboard_metrics(current_user.shop_id)
+    return render_template('dashboard.html', products=products, inv_map=inv_map,
+                           metrics=metrics)
 
 
 @app.route('/product/new', methods=['GET', 'POST'])
@@ -827,12 +831,24 @@ def new_product():
     if form.validate_on_submit():
         # The shop_id always comes from the logged-in user - NEVER from the
         # submitted form (an attacker cannot re-point a product at another shop).
+        # --- data-quality guardrails (Phase 4B) ---
+        qty = form.quantity.data
+        if qty is not None:
+            try:
+                qty = float(qty)
+                if qty <= 0:
+                    qty = None  # reject zero / negative as 'not set'
+            except (ValueError, TypeError):
+                qty = None     # non-numeric input treated as blank
+        unit_raw = (form.unit.data or '').strip()
+        # Strip stray digits from the unit field (e.g. user types "500g" there)
+        unit_clean = ''.join(c for c in unit_raw if not c.isdigit()).strip() or None
         p = Product(
             name=form.name.data,
             brand=(form.brand.data or '').strip() or None,
             category=(form.category.data or '').strip() or None,
-            quantity=form.quantity.data,
-            unit=(form.unit.data or '').strip() or None,
+            quantity=qty,
+            unit=unit_clean,
             cost_price=form.cost_price.data,
             selling_price=form.selling_price.data,
             target_margin=form.target_margin.data,
@@ -899,7 +915,16 @@ def edit_product(pid):
         form.populate_obj(p)    # copy the validated form values onto the Product
         # Normalize optional text fields: blank input -> NULL (not empty string).
         p.brand = (p.brand or '').strip() or None
-        p.unit = (p.unit or '').strip() or None
+        # --- data-quality guardrails (Phase 4B) ---
+        if p.quantity is not None:
+            try:
+                p.quantity = float(p.quantity)
+                if p.quantity <= 0:
+                    p.quantity = None
+            except (ValueError, TypeError):
+                p.quantity = None
+        unit_raw = (p.unit or '').strip()
+        p.unit = ''.join(c for c in unit_raw if not c.isdigit()).strip() or None
         p.category = (p.category or '').strip() or None
 
         # Log every cost/margin/selling-price change - the visible "cost history" trail.

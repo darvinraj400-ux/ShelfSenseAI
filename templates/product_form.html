@@ -58,14 +58,14 @@
             </div>
             <div class="col-md-4 mb-3">
               {{ form.quantity.label(class="form-label") }}
-              {{ form.quantity(class="form-control" + (" is-invalid" if form.quantity.errors else ""), placeholder="e.g. 1, 500, 1000") }}
+              {{ form.quantity(class="form-control" + (" is-invalid" if form.quantity.errors else ""), type="number", step="any", min="0", placeholder="e.g. 1, 500") }}
               {% for error in form.quantity.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
             </div>
             <div class="col-md-4 mb-3">
               {{ form.unit.label(class="form-label") }}
-              {{ form.unit(class="form-control" + (" is-invalid" if form.unit.errors else ""), placeholder="e.g. kg, g, L, pcs") }}
+              {{ form.unit(class="form-control" + (" is-invalid" if form.unit.errors else ""), placeholder="e.g. kg, L, pcs") }}
               {% for error in form.unit.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}

@@ -2,7 +2,7 @@
 {% block title %}Dashboard - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>{% if current_user.shop %}{{ current_user.shop.name }}{% else %}My{% endif %} Products</h2>
+  <h2>{% if current_user.shop %}{{ current_user.shop.name }}{% else %}My{% endif %} Dashboard</h2>
   {% if current_user.role in ['owner', 'manager'] %}
   <a href="{{ url_for('new_product') }}" class="btn btn-primary">+ Add Product</a>
   {% endif %}
@@ -14,6 +14,74 @@
   from <a href="{{ url_for('notifications') }}">your notifications</a> (🔔).
 </div>
 {% endif %}
+
+<!-- ===================== PHASE 4A: METRICS CARDS ===================== -->
+{% if metrics %}
+<div class="row g-3 mb-4">
+  <!-- Total Products -->
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Total Products</div>
+      <h2 class="mb-0 text-primary">{{ metrics.total_products }}</h2>
+    </div>
+  </div>
+
+  <!-- Low Stock Alerts -->
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Low Stock Alerts</div>
+      <h2 class="mb-0 {% if metrics.low_stock_count > 0 %}text-warning{% else %}text-success{% endif %}">
+        {{ metrics.low_stock_count }}
+      </h2>
+      {% if metrics.low_stock_count > 0 %}
+      <small class="text-muted">{{ metrics.low_stock_count }} product{{ 's' if metrics.low_stock_count != 1 }} below {{ low_stock_threshold or 10 }} units</small>
+      {% else %}
+      <small class="text-muted">All stock levels healthy</small>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Total Inventory Value -->
+  <div class="col-md-4">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Inventory Value</div>
+      <h2 class="mb-0 text-info">RM{{ "%.2f"|format(metrics.inventory_value) }}</h2>
+      <small class="text-muted">Total cost × stock</small>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ACTION REQUIRED PANEL ===================== -->
+{% if metrics.action_items %}
+<div class="card mb-4 border-warning">
+  <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
+    <span><strong>⚠ Action Required</strong> ({{ metrics.action_count }} item{{ 's' if metrics.action_count != 1 }})</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="list-group list-group-flush">
+      {% for item in metrics.action_items %}
+      <a href="{{ url_for('product_detail', pid=item.product_id) }}"
+         class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ item.product_name }}</strong>
+          <br>
+          <small class="text-muted">{{ item.message }}</small>
+        </div>
+        <span class="badge {% if item.severity == 'danger' %}bg-danger{% elif item.severity == 'warning' %}bg-warning text-dark{% else %}bg-info{% endif %}">
+          {{ item.action_type | replace('_', ' ') | title }}
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- ===================== PRODUCT TABLE ===================== -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Products</h4>
+</div>
 
 {% if products %}
 <div class="table-responsive">
