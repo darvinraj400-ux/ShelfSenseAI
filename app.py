@@ -52,6 +52,13 @@ from flask_wtf.csrf import CSRFError       # the exception raised when a CSRF to
 from dotenv import load_dotenv             # reads our .env config file
 from datetime import datetime, timezone, timedelta  # timestamps + invitation expiry
 from functools import wraps                # used by our role_required() decorator
+import logging                             # Phase 4D: request + error logging
+
+# Configure basic logging for production hardening
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
 from decimal import Decimal                # exact money/quantity arithmetic (no float noise)
 from sqlalchemy import func                # SQL functions (case-insensitive email matching)
 import secrets                             # cryptographically secure invitation tokens
@@ -1665,6 +1672,8 @@ def forbidden_error(error):
 
 @app.errorhandler(500)
 def internal_error(error):
+    # Log the full traceback for debugging without exposing it to the user
+    app.logger.error(f"Server Error: {error}", exc_info=True)
     db.session.rollback()  # clear any broken/half-committed DB transaction
     #   - Important: if a request died mid-transaction, MySQL would hold a
     #     broken session. Rollback keeps the next request clean.
