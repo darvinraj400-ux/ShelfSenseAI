@@ -2,7 +2,7 @@
 ============================================================
  ShelfSenseAI — Phase 3F LLM Pricing Explainer
 ============================================================
- Feeds deterministic rules and ML outputs into Gemini 2.5 Flash
+ Feeds deterministic rules and ML outputs into Gemini 2.5 Flash Lite
  to generate a natural-language explanation for the shop owner.
 
  CRITICAL: The entire module is designed to never crash the app.
@@ -88,7 +88,7 @@ def generate_pricing_explanation(product, market_stats, recommendation):
 
 
 def _call_gemini(prompt):
-    """Call Gemini 2.5 Flash and return the response text.
+    """Call Gemini 2.5 Flash Lite and return the response text.
 
     Raises on any failure — caller handles the fallback.
     """
@@ -100,7 +100,7 @@ def _call_gemini(prompt):
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-2.5-flash-lite",
         contents=[
             {"role": "user", "parts": [
                 {"text": SYSTEM_PROMPT},
