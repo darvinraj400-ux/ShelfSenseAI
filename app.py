@@ -174,6 +174,11 @@ class Product(db.Model):
     #   - baseline_margin is the compliance anchor: the margin "as originally set".
     #   - If a later edit pushes the margin ABOVE baseline without a cost rise,
     #     the system flags it as a profiteering risk under PCAPA 2011.
+    is_price_controlled = db.Column(db.Boolean, default=False)
+    #   - True if this product is a KPDN Barangan Kawalan (government price-controlled good).
+    government_ceiling_price = db.Column(db.Float, nullable=True)
+    #   - Official KPDN ceiling price (RM). The ML pricing engine will NEVER
+    #     recommend above this value when is_price_controlled is True.
     shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=False)
     #   - FK to shop.id: the product belongs to the SHOP, not a user. This is
     #     what lets owner/manager/staff of one shop share the same products
@@ -859,6 +864,8 @@ def new_product():
             cost_price=form.cost_price.data,
             selling_price=form.selling_price.data,
             target_margin=form.target_margin.data,
+            is_price_controlled=form.is_price_controlled.data or False,
+            government_ceiling_price=form.government_ceiling_price.data if form.is_price_controlled.data else None,
             shop_id=current_user.shop_id   # product belongs to the shop
         )
         p.baseline_margin = p.target_margin  # lock the margin baseline at creation
@@ -920,6 +927,9 @@ def edit_product(pid):
             p.baseline_margin = old_margin
 
         form.populate_obj(p)    # copy the validated form values onto the Product
+        # If price control is unchecked, clear the ceiling price.
+        if not p.is_price_controlled:
+            p.government_ceiling_price = None
         # Normalize optional text fields: blank input -> NULL (not empty string).
         p.brand = (p.brand or '').strip() or None
         # --- data-quality guardrails (Phase 4B) ---

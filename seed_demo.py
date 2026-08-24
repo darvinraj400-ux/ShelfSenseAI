@@ -52,13 +52,15 @@ DIRTY_PRODUCT_NAMES = [
 # ── Clean demo products ──
 # Each tuple: (name, brand, cost_price, selling_price, target_margin,
 #              category, quantity, unit, stock,
-#              history: [(cost, margin, days_ago), ...])
+#              history: [(cost, margin, days_ago), ...],
+#              is_price_controlled, government_ceiling_price)
 #
 # quantity / unit = package size (NOT inventory stock)
 #   BERAS  → 10 kg bag
 #   TELUR  → 30 pcs tray
 #   SUSU   → 900 g tin
-#   GULA   → 1 kg pack
+#   GULA   → 1 kg pack (KPDN Barangan Kawalan — ceiling RM 2.85)
+#   MINYAK → 1 kg polybag (KPDN Barangan Kawalan — ceiling RM 2.50)
 #   SUSU_SEGAR → 1 L carton
 #
 # stock = how many sellable packages the shop currently has on the shelf.
@@ -68,26 +70,31 @@ DEMO_PRODUCTS = [
      [
          (23.00, 12.0, 40),   # cost rose → margin kept → justified
          (22.50, 12.0, 70),
-     ]),
+     ], False, None),
     ("TELUR AYAM GRED A", "Generic", 12.00, 14.10, 18.0, "TELUR",
      30.0, "pcs", 8,
      [
          (11.50, 18.0, 30),
          (12.00, 18.0, 15),
-     ]),
+     ], False, None),
     ("SUSU TEPUNG SEGERA DUTCHLADY (BIASA)", "Dutch Lady", 16.50, 20.00, 22.0,
      "KRIMER DAN SUSU TEPUNG", 900.0, "g", 3,
      [
          (16.50, 20.0, 25),   # margin raised 20→22 with NO cost change → flag in demo
-     ]),
-    ("GULA PUTIH BERTAPIS HALUS (PELBAGAI JENAMA)", "Generic", 2.60, 3.00, 15.0, "GULA",
-     1.0, "kg", 0,
+     ], False, None),
+    ("GULA PUTIH BERTAPIS KASAR (PELBAGAI JENAMA)", "Generic", 2.60, 2.85, 10.0, "GULA",
+     1.0, "kg", 15,
      [
-         (2.55, 15.0, 20),
-     ]),
+         (2.55, 10.0, 20),
+     ], True, 2.85),   # KPDN Barangan Kawalan — ceiling RM 2.85
+    ("MINYAK MASAK SAWIT TULEN (PELBAGAI JENAMA)", "Generic", 2.20, 2.50, 13.0, "MINYAK MASAK",
+     1.0, "kg", 20,
+     [
+         (2.15, 13.0, 15),
+     ], True, 2.50),   # KPDN Barangan Kawalan — ceiling RM 2.50
     ("SUSU SEGAR KURMA FARM FRESH", "Farm Fresh", 7.90, 9.50, 20.0, "TERSEDIA MINUM",
      1.0, "L", 50,
-     []),
+     [], False, None),
 ]
 
 
@@ -148,13 +155,15 @@ def seed():
 
         # ---- products (belong to the SHOP, shared by all three users) ----
         for (name, brand, cost, selling, margin, category,
-             qty, unit, stock, hist) in DEMO_PRODUCTS:
+             qty, unit, stock, hist, is_kpdn, ceiling) in DEMO_PRODUCTS:
             p = Product.query.filter_by(name=name, shop_id=shop.id).first()
             if p is None:
                 p = Product(name=name, brand=brand, cost_price=cost,
                             selling_price=selling, target_margin=margin,
                             category=category, shop_id=shop.id,
-                            quantity=qty, unit=unit)
+                            quantity=qty, unit=unit,
+                            is_price_controlled=is_kpdn,
+                            government_ceiling_price=ceiling)
                 p.baseline_margin = margin
                 db.session.add(p)
                 db.session.flush()
@@ -167,6 +176,8 @@ def seed():
                     p.quantity is None or p.unit is None
                     or p.quantity != qty or (p.unit or '') != unit
                     or p.selling_price is None
+                    or p.is_price_controlled != is_kpdn
+                    or p.government_ceiling_price != ceiling
                 )
                 if needs_patch:
                     p.quantity = qty
@@ -175,7 +186,9 @@ def seed():
                         p.selling_price = selling
                     if p.cost_price != cost:
                         p.cost_price = cost
-                    print(f"  ~ product {name}: patched -> {qty} {unit}, sell {selling}")
+                    p.is_price_controlled = is_kpdn
+                    p.government_ceiling_price = ceiling
+                    print(f"  ~ product {name}: patched -> {qty} {unit}, sell {selling}, kpdn={is_kpdn}")
                 else:
                     print(f"  = product {name} exists")
 

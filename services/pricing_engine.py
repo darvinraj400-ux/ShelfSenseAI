@@ -290,6 +290,20 @@ def get_price_recommendation(product_id):
     warnings_list = []
     guardrails_triggered = False
     guardrails_applied = []
+    regulatory_cap_applied = False
+
+    # Rule 0: Regulatory Cap (KPDN Barangan Kawalan)
+    if product.is_price_controlled and product.government_ceiling_price:
+        ceiling = float(product.government_ceiling_price)
+        if ml_prediction > ceiling:
+            ml_prediction = ceiling
+            regulatory_cap_applied = True
+            guardrails_triggered = True
+            guardrails_applied.append("regulatory_cap")
+            reasoning.append(
+                f"Regulatory cap applied: price capped at RM{ceiling:.2f} "
+                f"(KPDN ceiling price for Barangan Kawalan)"
+            )
 
     # Rule 1: Cost Floor
     ml_prediction, floor_hit = _apply_cost_floor(ml_prediction, float(product.cost_price))
@@ -385,6 +399,8 @@ def get_price_recommendation(product_id):
         "stock_level": stock_level,
         "sales_velocity": velocity,
         "llm_explanation": llm_explanation,
+        "regulatory_cap_applied": regulatory_cap_applied,
+        "government_ceiling_price": float(product.government_ceiling_price) if product.government_ceiling_price else None,
     }
 
 

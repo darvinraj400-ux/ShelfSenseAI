@@ -34,7 +34,7 @@ Market range: {market_range}
 Confidence: {confidence}
 Guardrails applied: {guardrails}
 PCAPA warning: {pcapa_warning}
-
+{regulatory_context}
 Explain why this price is recommended. Be concise (2-3 sentences)."""
 
 
@@ -65,6 +65,16 @@ def generate_pricing_explanation(product, market_stats, recommendation):
     guardrails = ", ".join(recommendation.get("guardrails_applied", [])) or "None"
     pcapa_warn = "Yes" if recommendation.get("warnings") else "No"
 
+    # Regulatory context for KPDN Barangan Kawalan
+    regulatory_context = ""
+    if recommendation.get("regulatory_cap_applied"):
+        ceiling = recommendation.get("government_ceiling_price", "unknown")
+        regulatory_context = (
+            f"WARNING: This product is a Malaysian Barangan Kawalan (Price-Controlled Good). "
+            f"The recommended price was legally capped at the official KPDN ceiling price of "
+            f"RM{ceiling}. Emphasize that this is a strict legal compliance measure."
+        )
+
     prompt = USER_PROMPT_TEMPLATE.format(
         product_name=product.name,
         cost_price=float(product.cost_price),
@@ -77,6 +87,7 @@ def generate_pricing_explanation(product, market_stats, recommendation):
         confidence=recommendation.get("confidence", "unknown"),
         guardrails=guardrails,
         pcapa_warning=pcapa_warn,
+        regulatory_context=regulatory_context,
     )
 
     # Attempt LLM call

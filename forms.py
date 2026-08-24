@@ -128,6 +128,11 @@ class ProductForm(FlaskForm):
     #     suggested price (cost x margin). DecimalField = exact money, no float noise.
     target_margin = FloatField('Target Margin %', validators=[DataRequired(), NumberRange(min=0, max=1000)])
     #   - Margin bounded 0–1000% to keep the suggested-price formula sane.
+    is_price_controlled = BooleanField('Government Price-Controlled Item (Barangan Kawalan)')
+    #   - Check this if the product is under KPDN price control regulations.
+    government_ceiling_price = FloatField('KPDN Ceiling Price (RM)',
+                                          validators=[Optional(), NumberRange(min=0.01)])
+    #   - Official government ceiling price in RM. Only relevant when is_price_controlled is True.
     submit = SubmitField('Save')
 
     def validate_unit(self, field):
