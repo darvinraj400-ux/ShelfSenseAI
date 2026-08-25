@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Adjust Inventory - ShelfSense AI{% endblock %}
+{% block title %}{{ _t('ADJUST_STOCK') }} - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-6">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h3 class="mb-4">Adjust Inventory</h3>
-        <p class="mb-1"><strong>Product:</strong> {{ product.name }}</p>
-        <p class="text-muted">Current stock:
+        <h3 class="mb-4">{{ _t('ADJUST_STOCK') }}</h3>
+        <p class="mb-1"><strong>{{ _t('PRODUCT_NAME') }}:</strong> {{ product.name }}</p>
+        <p class="text-muted">{{ _t('CURRENT_STOCK') }}:
           <strong>{{ inv.current_stock|fmt_qty if inv else '0' }}</strong></p>
 
         <form method="POST">
@@ -31,7 +31,7 @@
           </div>
 
           {{ form.submit(class="btn btn-primary") }}
-          <a href="{{ url_for('inventory') }}" class="btn btn-secondary ms-2">Cancel</a>
+          <a href="{{ url_for('inventory') }}" class="btn btn-secondary ms-2">{{ _t('CANCEL') }}</a>
         </form>
       </div>
     </div>

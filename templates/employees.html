@@ -1,24 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Employee Management - ShelfSense AI{% endblock %}
+{% block title %}{{ _t('EMPLOYEE_MANAGEMENT') }} - ShelfSense AI{% endblock %}
 {% block content %}
-<h2 class="mb-3">Employee Management</h2>
-<p class="text-muted">{{ current_user.shop.name if current_user.shop else 'Your shop' }} — only the Owner can invite employees.</p>
+<h2 class="mb-3">{{ _t('EMPLOYEE_MANAGEMENT') }}</h2>
+<p class="text-muted">{{ current_user.shop.name if current_user.shop else 'Your shop' }} — {{ _t('OWNER_ONLY_INVITE') }}</p>
 
 <div class="row">
   <!-- Current team -->
   <div class="col-lg-7 mb-4">
     <div class="card">
       <div class="card-body">
-        <h5 class="mb-3">Current Employees</h5>
+        <h5 class="mb-3">{{ _t('CURRENT_EMPLOYEES') }}</h5>
         {% if team %}
         <div class="table-responsive">
           <table class="table table-sm table-striped">
             <thead class="table-light">
               <tr>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th class="text-end">Actions</th>
+                <th>{{ _t('EMAIL') }}</th>
+                <th>{{ _t('ROLE') }}</th>
+                <th>{{ _t('ACTIVE') }}</th>
+                <th class="text-end">{{ _t('ACTIONS') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -26,7 +26,7 @@
               <tr>
                 <td>{{ u.email }}</td>
                 <td>{{ u.role|title }}</td>
-                <td><span class="badge bg-success">Active</span></td>
+                <td><span class="badge bg-success">{{ _t('ACTIVE') }}</span></td>
                 <td class="text-end">
                   {% if u.id == current_user.id %}
                   <span class="text-muted">—</span>
@@ -34,9 +34,9 @@
                   <span class="text-muted">—</span>
                   {% else %}
                   <form method="POST" action="{{ url_for('remove_employee', uid=u.id) }}" class="d-inline"
-                        onsubmit="return confirm('Remove {{ u.email }} from this shop? Their account is kept but unlinked — they can be re-invited later.')">
+                        onsubmit="return confirm('{{ _t('REMOVE_CONFIRM') }}')">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    <button class="btn btn-sm btn-outline-danger">{{ _t('REMOVE') }}</button>
                   </form>
                   {% endif %}
                 </td>
@@ -46,7 +46,7 @@
           </table>
         </div>
         {% else %}
-        <p class="text-muted">No employees yet — invite your first manager or staff member below.</p>
+        <p class="text-muted">{{ _t('NO_EMPLOYEES_YET') }}</p>
         {% endif %}
       </div>
     </div>
@@ -54,18 +54,18 @@
     <!-- Invitations -->
     <div class="card mt-4">
       <div class="card-body">
-        <h5 class="mb-3">Invitations</h5>
+        <h5 class="mb-3">{{ _t('INVITATIONS') }}</h5>
         {% if invitations %}
         <div class="table-responsive">
           <table class="table table-sm table-striped">
             <thead class="table-light">
               <tr>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Created</th>
+                <th>{{ _t('EMAIL') }}</th>
+                <th>{{ _t('ROLE') }}</th>
+                <th>{{ _t('ACTIVE') }}</th>
+                <th>{{ _t('DATE') }}</th>
                 <th>Expires</th>
-                <th class="text-end">Actions</th>
+                <th class="text-end">{{ _t('ACTIONS') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -74,20 +74,20 @@
                 <td>{{ i.email }}</td>
                 <td>{{ i.role|title }}</td>
                 <td>
-                  {% if i.status == 'pending' %}<span class="badge bg-warning text-dark">Pending</span>
-                  {% elif i.status == 'accepted' %}<span class="badge bg-success">Accepted</span>
-                  {% elif i.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
-                  {% elif i.status == 'rejected' %}<span class="badge bg-danger">Declined</span>
-                  {% else %}<span class="badge bg-danger">Expired</span>{% endif %}
+                  {% if i.status == 'pending' %}<span class="badge bg-warning text-dark">{{ _t('PENDING') }}</span>
+                  {% elif i.status == 'accepted' %}<span class="badge bg-success">{{ _t('INVITATION_ACCEPTED') }}</span>
+                  {% elif i.status == 'revoked' %}<span class="badge bg-secondary">{{ _t('REVOKED') }}</span>
+                  {% elif i.status == 'rejected' %}<span class="badge bg-danger">{{ _t('DECLINED') }}</span>
+                  {% else %}<span class="badge bg-danger">{{ _t('EXPIRED') }}</span>{% endif %}
                 </td>
                 <td>{{ i.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td>{{ i.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td class="text-end">
                   {% if i.status == 'pending' %}
                   <form method="POST" action="{{ url_for('revoke_invitation', iid=i.id) }}" class="d-inline"
-                        onsubmit="return confirm('Revoke this invitation?')">
+                        onsubmit="return confirm('{{ _t('REVOKE') }}?')">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="btn btn-sm btn-outline-danger">Revoke</button>
+                    <button class="btn btn-sm btn-outline-danger">{{ _t('REVOKE') }}</button>
                   </form>
                   {% else %}
                   <span class="text-muted">—</span>
@@ -99,7 +99,7 @@
           </table>
         </div>
         {% else %}
-        <p class="text-muted">No invitations yet.</p>
+        <p class="text-muted">{{ _t('NO_INVITATIONS') }}</p>
         {% endif %}
       </div>
     </div>
@@ -109,7 +109,7 @@
   <div class="col-lg-5 mb-4">
     <div class="card">
       <div class="card-body">
-        <h5 class="mb-3">Invite Employee</h5>
+        <h5 class="mb-3">{{ _t('INVITE_EMPLOYEE') }}</h5>
         <form method="POST">
           {{ form.hidden_tag() }}
           <div class="mb-3">
@@ -130,9 +130,7 @@
         </form>
         <hr>
         <small class="text-muted">
-          After creating an invitation, the generated link is shown on screen —
-          share it with the employee (no email service in this phase).
-          Invitations expire after 48 hours.
+          {{ _t('INVITE_HINT') }}
         </small>
       </div>
     </div>

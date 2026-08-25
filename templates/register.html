@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Register - ShelfSense AI{% endblock %}
+{% block title %}{{ _t('CREATE_ACCOUNT') }} - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="row justify-content-center mt-5">
   <div class="col-md-5">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h3 class="text-center mb-4">Create Account</h3>
+        <h3 class="text-center mb-4">{{ _t('CREATE_ACCOUNT') }}</h3>
         <form method="POST">
           {{ form.hidden_tag() }}
 
@@ -21,7 +21,7 @@
             <div class="mb-3">
               {{ form.shop_name.label(class="form-label") }}
               {{ form.shop_name(class="form-control" + (" is-invalid" if form.shop_name.errors else ""), placeholder="e.g. Demo Retail Shop") }}
-              <div class="form-text">Your new shop is created when you register — you become its Owner.</div>
+              <div class="form-text">{{ _t('NEW_SHOP_HINT') }}</div>
               {% for error in form.shop_name.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
@@ -30,7 +30,7 @@
               <div class="col-md-6 mb-3">
                 {{ form.state.label(class="form-label") }}
                 {{ form.state(class="form-select" + (" is-invalid" if form.state.errors else "")) }}
-                <div class="form-text">Used to match local KPDN market prices.</div>
+                <div class="form-text">{{ _t('LOCAL_PRICE_HINT') }}</div>
                 {% for error in form.state.errors %}
                   <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
@@ -38,7 +38,7 @@
               <div class="col-md-6 mb-3">
                 {{ form.district.label(class="form-label") }}
                 {{ form.district(class="form-control", placeholder="e.g. Segamat") }}
-                <div class="form-text">Optional — for hyper-local pricing.</div>
+                <div class="form-text">{{ _t('DISTRICT_HINT') }}</div>
                 {% for error in form.district.errors %}
                   <div class="invalid-feedback d-block">{{ error }}</div>
                 {% endfor %}
@@ -47,9 +47,7 @@
           </div>
 
           <div id="employee-note" class="alert alert-info py-2 small" style="display:none">
-            Your account is created without shop membership. The shop Owner's
-            invitation decides your role (Manager/Staff) — you accept it from
-            your notifications (🔔) once invited.
+            {{ _t('EMPLOYEE_REG_NOTE') }}
           </div>
 
           <div class="mb-3">
@@ -66,7 +64,7 @@
           </div>
           {{ form.submit(class="btn btn-primary w-100") }}
         </form>
-        <p class="text-center mt-3">Have account? <a href="{{ url_for('login') }}">Login</a></p>
+        <p class="text-center mt-3">{{ _t('HAVE_ACCOUNT') }} <a href="{{ url_for('login') }}">{{ _t('LOGIN_LINK') }}</a></p>
       </div>
     </div>
   </div>

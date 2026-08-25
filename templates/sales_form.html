@@ -1,14 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Record Sale - ShelfSense AI{% endblock %}
+{% block title %}{{ _t('RECORD_SALE') }} - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-7">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h3 class="mb-4">Record Sale</h3>
-        <p class="text-muted">Log a completed sale. The selling price is a
-          snapshot of what was actually charged at that time — it stays in
-          history even if the product price changes later.</p>
+        <h3 class="mb-4">{{ _t('RECORD_SALE') }}</h3>
+        <p class="text-muted">{{ _t('SALE_DESC') }}</p>
         <form method="POST">
           {{ form.hidden_tag() }}
 
@@ -31,7 +29,7 @@
             <div class="col-md-6 mb-3">
               {{ form.selling_price.label(class="form-label") }}
               {{ form.selling_price(class="form-control" + (" is-invalid" if form.selling_price.errors else ""), placeholder="e.g. 21.00", min="0.01", step="0.01", id="selling_price") }}
-              <div class="form-text" id="price_hint">Defaults to the product's current price.</div>
+              <div class="form-text" id="price_hint">{{ _t('SALE_HINT') }}</div>
               {% for error in form.selling_price.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
@@ -39,7 +37,7 @@
           </div>
 
           {{ form.submit(class="btn btn-primary") }}
-          <a href="{{ url_for('sales') }}" class="btn btn-secondary ms-2">Cancel</a>
+          <a href="{{ url_for('sales') }}" class="btn btn-secondary ms-2">{{ _t('CANCEL') }}</a>
         </form>
       </div>
     </div>

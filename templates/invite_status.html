@@ -1,30 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Invitation - ShelfSense AI{% endblock %}
+{% block title %}{{ _t('INVITATION_STATUS') }} - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-6">
     <div class="card shadow-sm">
       <div class="card-body p-4 text-center">
-        <h3 class="mb-3">Invitation</h3>
+        <h3 class="mb-3">{{ _t('INVITATION_STATUS') }}</h3>
         {% if invitation.status == 'accepted' %}
         <div class="alert alert-success">
-          <strong>Already accepted.</strong> This invitation has already been used.
+          <strong>{{ _t('ALREADY_ACCEPTED') }}</strong> {{ _t('ALREADY_ACCEPTED_DETAIL') }}
         </div>
         {% elif invitation.status == 'revoked' %}
         <div class="alert alert-secondary">
-          <strong>Revoked.</strong> This invitation was revoked by the shop owner.
+          <strong>{{ _t('REVOKED') }}</strong> {{ _t('REVOKED_DETAIL') }}
         </div>
         {% elif invitation.status == 'rejected' %}
         <div class="alert alert-danger">
-          <strong>Declined.</strong> This invitation was declined by the invited employee.
+          <strong>{{ _t('DECLINED') }}</strong> {{ _t('DECLINED_DETAIL') }}
         </div>
         {% else %}
         <div class="alert alert-danger">
-          <strong>Expired.</strong> This invitation has passed its 48-hour validity.
-          Ask the shop owner to send a new one.
+          <strong>{{ _t('EXPIRED') }}</strong> {{ _t('EXPIRED_DETAIL') }}
         </div>
         {% endif %}
-        <a href="{{ url_for('login') }}" class="btn btn-primary">Go to login</a>
+        <a href="{{ url_for('login') }}" class="btn btn-primary">{{ _t('GO_TO_LOGIN') }}</a>
       </div>
     </div>
   </div>
