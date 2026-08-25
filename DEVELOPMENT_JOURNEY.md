@@ -14,7 +14,7 @@ entries to "Recent Updates" and update the "Last Updated" timestamp.
 **Type:** Final Year Project (FYP)
 **Team:** 3 Members (Backend, Database, Frontend)
 **Repository:** [github.com/darvinraj400-ux/ShelfSenseAI](https://github.com/darvinraj400-ux/ShelfSenseAI)
-**Last Updated:** 2026-08-25
+**Last Updated:** 2026-08-26
 
 ---
 
@@ -94,6 +94,8 @@ A user from Shop A can never access, modify, or even see Shop B's data through a
 3. **3-layer LLM fallback:** The Gemini API call is wrapped in a try/except that falls back to a deterministic string template, guaranteeing the UI never crashes.
 4. **Idempotent data pipelines:** Both `import_pricecatcher.py` and `scripts/etl_pricecatcher.py` are safe to re-run without creating duplicates.
 5. **Package Size ≠ Inventory Stock:** `Product.quantity/unit` describes the product (e.g., "1 kg Milo"); `Inventory.current_stock` describes the shelf count (e.g., "20 packages").
+6. **Geographic Market Localization:** Shop location (state/district) drives a 3-tier fallback chain (district → state → national) for market data filtering, ensuring hyper-local pricing.
+7. **Explainable AI Transparency:** Raw competitor observations from KPDN open data are exposed in the UI, giving users full visibility into the data driving AI recommendations.
 
 ---
 
@@ -258,12 +260,17 @@ Transforms legacy `price_catcher_item` + `price` tables into the Phase 3A schema
 
 ### 4.1 Market Analysis Engine (`services/market_analysis.py`)
 
-Aggregates price observations for verified market matches:
+Aggregates price observations for verified market matches with **geographic localization**:
 
 1. Fetches all `MarketPriceObservation` rows for verified `ProductMarketMatch` entries.
-2. Scales each observation's `normalized_unit_price` to the shop product's package size (e.g., RM/kg × 10 for a 10 kg bag).
-3. Filters invalid prices (≤0, None).
-4. Computes: N, min, max, mean, median, spread, and **Price Position Index (PPI)**.
+2. Applies the **3-tier geographic fallback chain** based on the shop's location:
+   - **Tier 1 (District):** Filter by shop's district (e.g., Segamat). If ≥3 observations, use these.
+   - **Tier 2 (State):** If insufficient district data, fall back to state (e.g., Johor).
+   - **Tier 3 (National):** If no state data, use all observations as fallback.
+3. Scales each observation's `normalized_unit_price` to the shop product's package size (e.g., RM/kg × 10 for a 10 kg bag).
+4. Filters invalid prices (≤0, None).
+5. Computes: N, min, max, mean, median, spread, and **Price Position Index (PPI)**.
+6. Collects **recent observations** (up to 15, newest first) for the Explainable AI transparency table.
 
 **PPI Formula:**
 ```
@@ -272,6 +279,8 @@ PPI = (shop_selling_price / market_median) × 100
 - PPI = 100: exactly at market median
 - PPI = 110: 10% above median (overpriced)
 - PPI = 90: 10% below median (underpriced)
+
+**Geographic Data Model:** The `MarketPriceObservation` table includes `state` and `district` columns populated by the ETL pipeline via JOIN with `lookup_premise`. This enables filtering observations by the shop's actual geographic region.
 
 ### 4.2 Product Matching Algorithm (`services/matching.py`)
 
@@ -429,7 +438,23 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 - **Logging:** `logging.basicConfig` configured at app startup with timestamp, level, and module name.
 - **Environment:** `.env.example` documenting SECRET_KEY, DATABASE_URL, and GEMINI_API_KEY.
 
-### 5.6 Documentation Suite
+### 5.6 Geographic Localization & Explainable AI
+
+**Geographic Market Intelligence (2026-08-26):**
+- **Shop Location:** Added `state` (SelectField with 16 Malaysian states) and `district` (StringField) to Shop model and registration form.
+- **Market Data Enrichment:** ETL now JOINs `lookup_premise` to store `state` and `district` on each `MarketPriceObservation` row.
+- **3-Tier Geographic Fallback:** `get_market_stats()` filters observations by the shop's location with fallback chain: district → state → national. Minimum 3 observations required at each tier before falling back.
+- **UI Integration:** Product Detail page shows localization scope (e.g., "📍 Segamat, Johor") and the `scaling_note` explains whether data is local or national.
+- **Migration:** `f7e8d9c0b1a2` adds 4 columns (shop.state, shop.district, market_price_observation.state, market_price_observation.district).
+- **Seed Update:** Demo shop set to Johor/Segamat.
+
+**Competitor Observation Transparency (2026-08-26):**
+- **Raw Data Exposure:** `get_market_stats()` now returns `recent_observations` — up to 15 raw KPDN price observations (date, product, package, location, price) sorted newest-first.
+- **UI Table:** New "Recent Competitor Pricing (KPDN Open Data)" card in Market Intelligence tab shows the actual data points driving the market summary.
+- **Explainable AI:** Users can verify the underlying government data, building trust in the AI's pricing recommendations.
+- **Graceful Fallback:** Shows placeholder message when no observations are available.
+
+### 5.7 Documentation Suite
 
 | File | Purpose |
 |---|---|
@@ -492,6 +517,20 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 ## 7. Recent Updates
 
 <!-- New entries are appended below this line. Do not modify previous entries. -->
+
+### 2026-08-26 — Geographic Market Localization & Explainable AI
+
+- **Added:** Shop `state` and `district` columns for geographic market intelligence.
+- **Added:** `MarketPriceObservation` `state` and `district` columns populated by ETL via JOIN with `lookup_premise`.
+- **Added:** 3-tier geographic fallback chain in `get_market_stats()`: district → state → national (minimum 3 observations per tier).
+- **Added:** `recent_observations` key in market stats return dict — up to 15 raw KPDN price observations for Explainable AI transparency.
+- **Added:** "Recent Competitor Pricing (KPDN Open Data)" table in Market Intelligence tab showing date, product, package, location, and price.
+- **Updated:** Registration form with Malaysian state dropdown (16 states) and district field.
+- **Updated:** Pricing engine passes shop context for geo-filtered market statistics.
+- **Updated:** ETL script updated to JOIN `lookup_premise` and store state/district per observation.
+- **Added:** Hand-written migration `f7e8d9c0b1a2` (4 new columns).
+- **Updated:** Demo shop set to Johor/Segamat.
+- **Commits:** `b5de145`, `2637d6c`
 
 ### 2026-08-25 — ML Training on KPDN Big Data
 

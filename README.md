@@ -7,7 +7,7 @@ ShelfSenseAI is a Flask-based retail management and market intelligence applicat
 ShelfSenseAI follows a decoupled architecture, separating core retail management from the market intelligence engine.
 
 *   **Core Retail:** Shop management, Auth, Employee roles, Inventory, Sales, Price History.
-*   **Market Intelligence:** Idempotent ETL pipeline (PriceCatcher), exact/fuzzy matching (RapidFuzz), statistical market analysis (PPI).
+*   **Market Intelligence:** Idempotent ETL pipeline (PriceCatcher), geographic market localization (3-tier fallback), exact/fuzzy matching (RapidFuzz), statistical market analysis (PPI), and Explainable AI (raw competitor observation data).
 *   **AI/ML Engine:** Random Forest Regressor trained on 4.5 years of real KPDN PriceCatcher data (2022-2026, 5.4M+ observations) with deterministic guardrails, and Gemini LLM (3-layer fallback for natural-language explanations).
 
 ## Technology Stack
@@ -44,4 +44,4 @@ ShelfSenseAI follows a decoupled architecture, separating core retail management
 ## Development Phases
 *   **Phase 1-2:** Core Foundation, Identity, Inventory, Roles & Registration.
 *   **Phase 3:** Market Intelligence, ETL, Matching, ML Pricing (trained on real KPDN 2022-2026 data), and AI Explainer.
-*   **Phase 4:** Dashboard Analytics, Data Quality, KPDN Price Control Guardrails, Production Hardening, Testing (144 tests).
+*   **Phase 4:** Dashboard Analytics, Data Quality, KPDN Price Control Guardrails, Geographic Localization, Explainable AI, Production Hardening, Testing (144 tests).
