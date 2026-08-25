@@ -24,6 +24,7 @@ from flask_wtf import FlaskForm
 
 from wtforms import (StringField, PasswordField, FloatField, DecimalField,
                      BooleanField, SelectField, SubmitField)
+from translations import LANGUAGE_OPTIONS  # noqa: E402
 
 # Standard Malaysian states (Peninsular + East Malaysia + Federal Territories)
 MALAYSIAN_STATES = [('', '-- Select State --'),
@@ -233,3 +234,41 @@ class InventoryAdjustmentForm(FlaskForm):
         # A zero adjustment is meaningless and would pollute the audit trail.
         if field.data is not None and field.data == 0:
             raise ValidationError('Adjustment cannot be zero.')
+
+
+class UserProfileForm(FlaskForm):
+    """User profile form for updating account details. Password is optional —
+    only updated when the user explicitly provides a new one. Email changes
+    are validated for uniqueness (another user cannot claim the same email)."""
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    new_password = PasswordField('New Password (leave blank to keep current)',
+                                  validators=[Optional(), Length(min=6)])
+    confirm_password = PasswordField('Confirm New Password',
+                                      validators=[Optional()])
+    submit = SubmitField('Update Profile')
+
+    def validate_confirm_password(self, field):
+        """Only enforce matching when the user actually typed a new password."""
+        if self.new_password.data and field.data != self.new_password.data:
+            raise ValidationError('Passwords must match.')
+
+
+class ShopSettingsForm(FlaskForm):
+    """Shop settings form for updating shop location and default margin.
+    Only the owner can modify these settings."""
+    shop_name = StringField('Shop Name', validators=[DataRequired(), Length(max=120)])
+    state = SelectField('State', choices=MALAYSIAN_STATES, default='')
+    district = StringField('District (optional)', validators=[Length(max=50)])
+    default_target_margin = FloatField('Default Target Margin %',
+                                       validators=[Optional(),
+                                                   NumberRange(min=0, max=1000)])
+    submit = SubmitField('Save Settings')
+
+
+class PreferencesForm(FlaskForm):
+    """User preferences form for language selection. Supports Malaysia's
+    4 main languages: English, Bahasa Melayu, Chinese (Mandarin), Tamil."""
+    preferred_language = SelectField('Preferred Language',
+                                     choices=LANGUAGE_OPTIONS,
+                                     validators=[DataRequired()])
+    submit = SubmitField('Save Preferences')

@@ -121,12 +121,17 @@ class Shop(db.Model):
 
 class User(UserMixin, db.Model):
     """Registered users with a role: owner / manager / staff.
-    Every user belongs to exactly one Shop (shop_id)."""
+    Every user belongs to exactly one Shop (shop_id).
+    preferred_language stores the user's UI language choice for
+    the 4-language localization system (EN/MS/ZH/TA)."""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)  # never the raw password!
     role = db.Column(db.String(20), nullable=False, default='staff')  # owner | manager | staff | unassigned
     shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=True)
+    preferred_language = db.Column(db.String(5), nullable=False, default='en')
+    #   - UI language preference: 'en' (English), 'ms' (Bahasa Melayu),
+    #     'zh' (Chinese/Mandarin), 'ta' (Tamil). Default is English.
     #   - FK to shop.id. NULL = an employee account that has NOT joined any
     #     shop yet (created via the "Join an existing shop" registration path).
     #     Shop registration creates a NEW shop and makes the registrant its
@@ -608,6 +613,7 @@ from services.market_analysis import get_market_stats   # noqa: E402
 from services.pricing_engine import (get_price_recommendation,  # noqa: E402
                                      apply_price as _apply_price)
 from services.dashboard_service import get_dashboard_metrics  # noqa: E402
+from translations import _t, LANGUAGE_NAMES, LANGUAGE_OPTIONS  # noqa: E402
 
 
 # -------------------------------------------------
@@ -749,12 +755,25 @@ def mark_invitation_notifications_read(inv):
 
 @app.context_processor
 def inject_unread_notifications():
-    """Expose the unread-notification count to every template so the navbar
-    can show a 🔔 badge (nothing when there are no unread notifications)."""
+    """Expose the unread-notification count and translation helpers to every
+    template. The navbar uses these for localized UI text and the 🔔 badge."""
     if current_user.is_authenticated:
-        return {'unread_notifications': Notification.query.filter_by(
-            user_id=current_user.id, is_read=False).count()}
-    return {'unread_notifications': 0}
+        lang = getattr(current_user, 'preferred_language', 'en') or 'en'
+        return {
+            'unread_notifications': Notification.query.filter_by(
+                user_id=current_user.id, is_read=False).count(),
+            'current_language': lang,
+            'language_names': LANGUAGE_NAMES,
+            'language_options': LANGUAGE_OPTIONS,
+            '_t': lambda key: _t(key, lang),
+        }
+    return {
+        'unread_notifications': 0,
+        'current_language': 'en',
+        'language_names': LANGUAGE_NAMES,
+        'language_options': LANGUAGE_OPTIONS,
+        '_t': lambda key: _t(key, 'en'),
+    }
 # -------------------------------------------------
 
 
@@ -850,6 +869,77 @@ def login():
 def logout():
     logout_user()                    # clear the Flask-Login session
     return redirect(url_for('login'))
+
+
+# -------------------------------------------------
+# USER PROFILE & SETTINGS
+# -------------------------------------------------
+@app.route('/profile')
+@login_required
+def profile():
+    """User profile page showing account details, role badge, and shop info."""
+    return render_template('profile.html', user=current_user)
+
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    """Tabbed settings page for account details, shop settings, and language."""
+    active_tab = request.args.get('tab', 'account')
+
+    # --- Account Details Form ---
+    account_form = UserProfileForm(obj=current_user)
+    shop_form = ShopSettingsForm(obj=current_user.shop if current_user.shop else None)
+    prefs_form = PreferencesForm(obj=current_user)
+
+    if request.method == 'POST':
+        form_type = request.form.get('form_type')
+
+        if form_type == 'account' and account_form.validate_on_submit():
+            email = norm_email(account_form.email.data)
+            existing = User.query.filter(
+                func.lower(User.email) == email,
+                User.id != current_user.id).first()
+            if existing:
+                flash('That email is already in use by another account.', 'danger')
+            else:
+                current_user.email = email
+                if account_form.new_password.data:
+                    current_user.set_password(account_form.new_password.data)
+                db.session.commit()
+                flash('Account details updated.', 'success')
+            active_tab = 'account'
+
+        elif form_type == 'shop' and current_user.can('owner'):
+            if shop_form.validate_on_submit():
+                if current_user.shop:
+                    current_user.shop.name = shop_form.shop_name.data.strip()
+                    current_user.shop.state = (shop_form.state.data or '').strip() or None
+                    current_user.shop.district = (shop_form.district.data or '').strip() or None
+                    if shop_form.default_target_margin.data is not None:
+                        # Store as a note; actual enforcement is per-product.
+                        current_user.shop._default_margin = shop_form.default_target_margin.data
+                    db.session.commit()
+                    flash('Shop settings updated.', 'success')
+                else:
+                    flash('No shop associated with your account.', 'danger')
+            active_tab = 'shop'
+
+        elif form_type == 'language' and prefs_form.validate_on_submit():
+            lang = prefs_form.preferred_language.data
+            if lang in ('en', 'ms', 'zh', 'ta'):
+                current_user.preferred_language = lang
+                db.session.commit()
+                flash('Language preference saved.', 'success')
+            else:
+                flash('Invalid language selection.', 'danger')
+            active_tab = 'language'
+
+    return render_template('settings.html',
+                           account_form=account_form,
+                           shop_form=shop_form,
+                           prefs_form=prefs_form,
+                           active_tab=active_tab)
 
 
 @app.route('/dashboard')
