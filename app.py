@@ -936,6 +936,7 @@ def settings():
             active_tab = 'language'
 
     return render_template('settings.html',
+                           user=current_user,
                            account_form=account_form,
                            shop_form=shop_form,
                            prefs_form=prefs_form,
