@@ -1,6 +1,30 @@
 """
- tests/test_llm_explainer.py — Phase 3F LLM explainer tests
- Tests fallback logic, payload structure, mocked Gemini success.
+============================================================
+ ShelfSenseAI - Phase 3F LLM Explainer Tests
+============================================================
+
+Tests the three-layer fallback chain for the Gemini LLM pricing
+explainer service:
+
+Fallback Tests:
+  - No API key -> deterministic fallback (never crashes)
+  - API error -> deterministic fallback (never crashes)
+  - Empty response -> deterministic fallback (never crashes)
+
+Payload Structure Tests:
+  - Mocked Gemini success -> LLM text returned
+  - PCAPA warnings -> included in fallback output
+  - No market data -> fallback mentions it explicitly
+
+Integration Test:
+  - Full pricing pipeline includes llm_explanation in payload
+  - Fallback string is non-empty even without Gemini configured
+
+All tests use unittest.mock to simulate API failures without
+requiring a real Gemini API key.
+
+Run:
+    ./venv/Scripts/python.exe tests/test_llm_explainer.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +55,11 @@ class FakeProduct:
 
 # ======================================================== FALLBACK TESTS
 def test_fallback_no_key():
+    """Test Layer 3: fallback when GEMINI_API_KEY is not set.
+
+    Verifies that generate_pricing_explanation() returns a non-empty
+    string even when the API key is missing from the environment.
+    """
     print("\n--- Fallback: No API Key ---")
     product = FakeProduct()
     market_stats = {"n": 4, "median": 26.00, "min": 24.00, "max": 28.00}
@@ -49,6 +78,11 @@ def test_fallback_no_key():
 
 
 def test_fallback_api_error():
+    """Test Layer 2: fallback when the Gemini API raises an exception.
+
+    Mocks _call_gemini to raise RuntimeError, simulating network errors,
+    rate limits, or any API failure. Verifies the fallback is returned.
+    """
     print("\n--- Fallback: API Error ---")
     product = FakeProduct()
     market_stats = {"n": 4, "median": 26.00, "min": 24.00, "max": 28.00}
@@ -64,6 +98,11 @@ def test_fallback_api_error():
 
 
 def test_fallback_empty_response():
+    """Test Layer 2: fallback when Gemini returns an empty response.
+
+    Mocks _call_gemini to raise RuntimeError('empty response'),
+    simulating a valid API call that returns no useful text.
+    """
     print("\n--- Fallback: Empty Response ---")
     product = FakeProduct()
     market_stats = {"n": 0, "median": None, "min": None, "max": None}
@@ -81,6 +120,11 @@ def test_fallback_empty_response():
 
 # ======================================================== PAYLOAD STRUCTURE
 def test_payload_structure():
+    """Test that a successful Gemini call returns the LLM text.
+
+    Mocks _call_gemini to return a realistic explanation string
+    and verifies it is passed through correctly.
+    """
     print("\n--- Payload Structure ---")
     product = FakeProduct()
     market_stats = {"n": 4, "median": 26.00, "min": 24.00, "max": 28.00}
@@ -97,6 +141,11 @@ def test_payload_structure():
 
 
 def test_fallback_with_warnings():
+    """Test that the fallback includes PCAPA warnings when present.
+
+    Verifies that the deterministic fallback string incorporates
+    any compliance warnings from the recommendation payload.
+    """
     print("\n--- Fallback with PCAPA Warning ---")
     product = FakeProduct()
     product.baseline_margin = 12.0
@@ -111,6 +160,11 @@ def test_fallback_with_warnings():
 
 
 def test_fallback_no_market():
+    """Test that the fallback mentions no market data when n=0.
+
+    Verifies that when no verified market matches exist, the fallback
+    explanation explicitly states this fact.
+    """
     print("\n--- Fallback: No Market Data ---")
     product = FakeProduct()
     market_stats = {"n": 0, "median": None, "min": None, "max": None}
@@ -125,6 +179,12 @@ def test_fallback_no_market():
 
 # ======================================================== INTEGRATION
 def test_pricing_payload_has_llm():
+    """Test that the full pricing pipeline includes llm_explanation.
+
+    Creates a real product in the database and calls get_price_recommendation()
+    without a Gemini API key. Verifies the payload contains a non-empty
+    llm_explanation string (the deterministic fallback).
+    """
     print("\n--- Pricing Payload has llm_explanation ---")
     # This tests that get_price_recommendation includes llm_explanation
     # even when Gemini is not configured (uses fallback)

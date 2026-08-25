@@ -1,6 +1,31 @@
 """
- tests/test_dashboard_service.py — Phase 4A dashboard service tests
- Tests metrics calculation, action items, and shop isolation.
+============================================================
+ ShelfSenseAI - Phase 4A Dashboard Service Tests
+============================================================
+
+Tests the dashboard metrics computation and action-item generation:
+
+Metrics Tests:
+  - Empty metrics for users without a shop
+  - Basic metrics: product count, inventory valuation
+  - Low stock detection: products with stock < 10
+  - Zero stock: triggers 'danger' severity (out-of-stock)
+
+Action Item Tests:
+  - PCAPA compliance warning: margin > baseline without cost increase
+  - Cost floor violation: selling price below cost * 1.05
+  - PPI overpriced: priced > 10% above market median (with market data)
+  - PPI underpriced: priced > 10% below market median (with market data)
+
+Isolation Tests:
+  - Shop A metrics don't include Shop B products
+  - Empty shop returns zero metrics
+
+Each test creates shop/product fixtures and cleans them up,
+ensuring the database is restored to its pre-test state.
+
+Run:
+    ./venv/Scripts/python.exe tests/test_dashboard_service.py
 """
 import sys, os, string, random as rnd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -74,6 +99,11 @@ def _make_product(sid, name="Prod", cost=10.0, margin=30.0, selling=13.0,
 
 # ======================================================== METRICS TESTS
 def test_empty_metrics():
+    """Test _empty_metrics() returns a valid empty dict.
+
+    Verifies all fields are zero/empty, ensuring the dashboard template
+    always receives a valid metrics object even for unassigned users.
+    """
     print("\n--- Empty Metrics ---")
     m = _empty_metrics()
     check("total_products = 0", m["total_products"] == 0)
@@ -84,6 +114,11 @@ def test_empty_metrics():
 
 
 def test_basic_metrics():
+    """Test basic product count and inventory valuation.
+
+    Creates two products with known costs and stock levels, then verifies
+    that total_products and inventory_value are calculated correctly.
+    """
     print("\n--- Basic Metrics ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -99,6 +134,12 @@ def test_basic_metrics():
 
 
 def test_low_stock():
+    """Test low-stock detection and severity classification.
+
+    Creates products with stock levels of 50 (healthy), 8 (low), and 0 (out-of-stock).
+    Verifies that only the low/zero products appear in the action items,
+    and that zero stock gets 'danger' severity.
+    """
     print("\n--- Low Stock ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -122,6 +163,12 @@ def test_low_stock():
 
 
 def test_pcapa_action():
+    """Test PCAPA compliance action item generation.
+
+    Creates a product with baseline_margin=30% but target_margin=50%
+    (margin raised without cost increase). Verifies that a 'pcapa_warning'
+    action item with 'danger' severity is generated.
+    """
     print("\n--- PCAPA Action Item ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -143,6 +190,12 @@ def test_pcapa_action():
 
 
 def test_cost_floor_action():
+    """Test cost floor violation action item generation.
+
+    Creates a product with cost=10.00 and selling_price=9.00 (below
+    the 10.50 floor). Verifies that a 'below_cost_floor' action item
+    with 'danger' severity is generated.
+    """
     print("\n--- Cost Floor Action Item ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -158,6 +211,12 @@ def test_cost_floor_action():
 
 
 def test_isolation():
+    """Test shop-level data isolation in dashboard metrics.
+
+    Creates two shops: Shop A has 1 product, Shop B has none.
+    Verifies that Shop A's metrics show 1 product while Shop B's
+    show 0, proving that shop isolation is enforced.
+    """
     print("\n--- Shop Isolation ---")
     _purge()
     _, sid_a, ea = _make_shop(TEST_SHOPS[0])
@@ -175,6 +234,11 @@ def test_isolation():
 
 
 def test_no_shop():
+    """Test that None shop_id returns empty metrics.
+
+    Verifies that unassigned employees (shop_id=None) receive
+    a valid empty metrics dict without errors.
+    """
     print("\n--- No Shop ---")
     m = get_dashboard_metrics(None)
     check("No shop returns empty metrics", m["total_products"] == 0)

@@ -501,11 +501,20 @@ class MarketItem(db.Model):
 
 class MarketPriceObservation(db.Model):
     """ONE observed price for a MarketItem at a point in time.
+
+    This is the time-series table that holds historical price observations
+    from external sources. Each row represents a single price point for
+    a market item at a specific date.
+
     effective_price is DERIVED on insert: promo_price when is_on_promo,
-    else regular_price - callers never pass it directly. normalized_unit_price
-    is the price per BASE unit (RM/kg, RM/L, RM/unit) computed with
-    utils.normalization.calculate_unit_price - the number that makes a
-    fair comparison across differently-sized packages possible."""
+    else regular_price - callers never pass it directly. This derivation
+    ensures consistency: the effective price always reflects the best
+    available price (promo or regular).
+
+    normalized_unit_price is the price per BASE unit (RM/kg, RM/L, RM/unit)
+    computed with utils.normalization.calculate_unit_price. This is the
+    number that makes fair comparisons across differently-sized packages
+    possible (e.g. a 500g packet vs a 10kg bag)."""
     __tablename__ = 'market_price_observation'
     id = db.Column(db.Integer, primary_key=True)
     market_item_id = db.Column(db.Integer, db.ForeignKey('market_item.id'),
@@ -539,10 +548,20 @@ class MarketPriceObservation(db.Model):
 
 class ProductMarketMatch(db.Model):
     """The ONLY bridge between a shop Product and a MarketItem.
+
+    This mapping table is the architectural keystone of the Market
+    Intelligence system. It keeps Products source-independent (a product
+    stands alone even with no market match) while enabling market data
+    integration when matches are established.
+
     A product may be matched to many market items (or none); a market
     item may be matched to many shop products (each shop has its own).
-    confidence_score = how sure the matcher is (0.95 = 95%); match_type
-    is exact | fuzzy | manual; is_verified = shop owner confirmed it."""
+
+    confidence_score = how sure the matcher is (0.95 = 95%)
+    match_type = exact | fuzzy | manual
+    is_verified = shop owner explicitly confirmed the link
+    is_rejected = shop owner explicitly rejected the suggestion
+    """
     __tablename__ = 'product_market_match'
     __table_args__ = (db.UniqueConstraint('shop_product_id', 'market_item_id',
                                           name='uq_product_market_match'),)
@@ -1391,6 +1410,19 @@ def receive_inventory(pid):
 @login_required
 @role_required('owner')   # only the OWNER manages employees - never manager/staff
 def employees():
+    """Owner-only employee management page.
+
+    This page serves three functions:
+      1. Display the current shop team (all users with this shop_id)
+      2. Display invitation history (all ShopInvitation rows for this shop)
+      3. Accept POST requests to create new invitations
+
+    Security guarantees:
+      - Only owners can access this page (enforced by role_required)
+      - All queries are scoped to current_user.shop_id (shop isolation)
+      - The invitation's shop_id comes from the owner's session, never the form
+      - The invitation's role comes from the form dropdown, never the invitee
+    """
     """Owner-only employee management page: current team, invitations and the
     invite form. Everything is scoped to current_user.shop_id - a manager of
     another shop can never see or touch this shop's team/invitations."""
@@ -1593,6 +1625,27 @@ def reject_invitation(iid):
 
 @app.route('/invite/accept/<token>', methods=['GET', 'POST'])
 def accept_invitation(token):
+    """The shareable invitation link endpoint.
+
+    This is the public-facing URL that the owner shares with the invitee.
+    The token is a cryptographically secure random string — it is the
+    credential that grants access to the invitation.
+
+    Flow:
+      1. Validate the token exists and the invitation is still pending.
+      2. Lazily expire past-48h invitations.
+      3. Check if the invited email already has an account:
+         a. If YES and logged in as that account: show Accept/Reject.
+         b. If YES but not logged in as that account: redirect to login.
+         c. If NO: show the registration form to create an employee account.
+      4. On account creation: sync_pending_invitations surfaces the invite.
+
+    Security guarantees:
+      - shop_id and role come ONLY from the invitation row (authoritative)
+      - The invitee cannot tamper with these values through form fields
+      - Existing users of OTHER shops are never moved (blocked)
+      - Owners of other shops are never silently demoted
+    """
     """The shareable invitation link. The shop_id + role come ONLY from the
     invitation row - never from the request.
       A) invited email has NO account -> create an employee account (no shop

@@ -1,5 +1,31 @@
 """
- tests/test_pricing_engine.py — Phase 3E pricing engine tests
+============================================================
+ ShelfSenseAI - Phase 3E Pricing Engine Tests
+============================================================
+
+Comprehensive test suite for the intelligent pricing engine, covering:
+
+Part 1 — Pure function tests (no database required):
+  - Cost floor guardrail (Rule 1): price >= cost * 1.05
+  - Market sanity guardrail (Rule 2): clamp within market bounds
+  - PCAPA compliance check (Rule 3): flag margin above baseline
+  - Confidence scoring: data availability -> confidence level
+
+Part 2 — Database + API integration tests:
+  - Full recommendation pipeline (get_price_recommendation)
+  - Pricing API endpoint (GET /api/product/<pid>/pricing)
+  - Apply price endpoint (POST /api/product/<pid>/apply-price)
+  - Role-based access control (owner/manager/staff permissions)
+  - Shop isolation (cross-shop access blocked)
+  - Cost floor enforcement in real recommendations
+  - No-market-data fallback behavior
+
+Each test creates its own shop/product fixtures and cleans them up
+in the finally block, ensuring the database is restored to its
+pre-test state.
+
+Run:
+    ./venv/Scripts/python.exe tests/test_pricing_engine.py
 """
 import sys, os, re, string, random as rnd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,6 +126,13 @@ def _login(client, email):
 
 # =============================== PURE FUNCTION TESTS
 def test_cost_floor():
+    """Test Rule 1: Cost floor guardrail.
+
+    Verifies that:
+    - Prices below cost * 1.05 are raised to the floor.
+    - Prices at or above the floor are unchanged.
+    - The floor is correctly computed for different cost values.
+    """
     print("\n--- Cost Floor ---")
     p, h = _apply_cost_floor(8.0, 10.0)
     check("Below floor raised to 10.50", h and p == 10.50)
@@ -112,6 +145,14 @@ def test_cost_floor():
 
 
 def test_market_sanity():
+    """Test Rule 2: Market sanity guardrail.
+
+    Verifies that:
+    - Prices below 70% of market min are clamped up.
+    - Prices above 150% of market max are clamped down.
+    - Prices within the range are unchanged.
+    - None/0 market data passes through unclamped.
+    """
     print("\n--- Market Sanity ---")
     p, h = _apply_market_sanity(5.0, 10.0, 20.0)
     check("Below min clamped to 7.00", h and p == 7.0)
@@ -126,6 +167,13 @@ def test_market_sanity():
 
 
 def test_pcapa():
+    """Test Rule 3: PCAPA compliance check.
+
+    Verifies that:
+    - Margin above baseline WITHOUT cost increase triggers warning.
+    - Margin at or below baseline is compliant.
+    - Cost rise that justifies higher margin is compliant.
+    """
     print("\n--- PCAPA ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -151,6 +199,14 @@ def test_pcapa():
 
 
 def test_confidence():
+    """Test confidence level computation.
+
+    Verifies the confidence classification:
+    - No market data -> 'low'
+    - No ML model -> 'medium'
+    - Full data, no guardrails -> 'high'
+    - Guardrails triggered -> 'medium'
+    """
     print("\n--- Confidence ---")
     c, _ = _compute_confidence(False, True, False)
     check("No market data = low", c == "low")
@@ -164,6 +220,12 @@ def test_confidence():
 
 # =============================== DB + API TESTS
 def test_recommendation_basic():
+    """Test the full recommendation pipeline with a real product.
+
+    Verifies that get_price_recommendation() returns a complete payload
+    with all required fields, and that the recommended price is above
+    the cost floor.
+    """
     print("\n--- Basic Recommendation ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -183,6 +245,13 @@ def test_recommendation_basic():
 
 
 def test_api_pricing():
+    """Test the pricing API endpoints via HTTP requests.
+
+    Verifies:
+    - GET /api/product/<pid>/pricing returns 200 with recommended_price.
+    - POST /api/product/<pid>/apply-price updates selling_price.
+    - PriceHistory entry is created for the audit trail.
+    """
     print("\n--- API ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -214,6 +283,13 @@ def test_api_pricing():
 
 
 def test_role_permissions():
+    """Test RBAC enforcement on pricing endpoints.
+
+    Verifies:
+    - Owner can GET /pricing and POST /apply-price.
+    - Manager can GET /pricing and POST /apply-price.
+    - Staff can GET /pricing but gets 403 on POST /apply-price.
+    """
     print("\n--- Roles ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -250,6 +326,11 @@ def test_role_permissions():
 
 
 def test_shop_isolation():
+    """Test that cross-shop access is blocked on pricing endpoints.
+
+    Verifies that a user from Shop B cannot access pricing data
+    or apply prices to products belonging to Shop A.
+    """
     print("\n--- Isolation ---")
     _purge()
     _, sid_a, ea = _make_shop(TEST_SHOPS[0])
@@ -267,6 +348,12 @@ def test_shop_isolation():
 
 
 def test_cost_floor_enforced():
+    """Test that the cost floor is enforced in real recommendations.
+
+    Creates a product with high cost and verifies that the recommended
+    price is never below cost * 1.05, even when the ML model might
+    predict a lower value.
+    """
     print("\n--- Floor Enforcement ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
@@ -280,6 +367,13 @@ def test_cost_floor_enforced():
 
 
 def test_no_market_data():
+    """Test recommendation behavior when no market data exists.
+
+    Verifies that:
+    - Confidence is 'low' (no market intelligence available).
+    - A price is still returned (rule-based fallback).
+    - Market stats show n=0 (no observations).
+    """
     print("\n--- No Market Data ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
