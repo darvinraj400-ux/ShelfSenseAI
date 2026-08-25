@@ -4,7 +4,7 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>{{ product.name }}</h2>
   <div>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">← Back</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">{{ _t("BACK") }}</a>
     {% if can_edit %}
     <a href="{{ url_for('edit_product', pid=product.id) }}" class="btn btn-outline-primary">Edit</a>
     {% endif %}
@@ -14,13 +14,13 @@
 <!-- Tabs -->
 <ul class="nav nav-tabs mb-3" id="productTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link active" id="tab-btn-details" data-pane="details" type="button">📋 Details</button>
+    <button class="nav-link active" id="tab-btn-details" data-pane="details" type="button">{{ _t("TAB_DETAILS") }}</button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="tab-btn-market" data-pane="market" type="button">📈 Market Intelligence</button>
+    <button class="nav-link" id="tab-btn-market" data-pane="market" type="button">{{ _t("TAB_MARKET_INTEL") }}</button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" id="tab-btn-pricing" data-pane="pricing" type="button">💡 Pricing Recommendation</button>
+    <button class="nav-link" id="tab-btn-pricing" data-pane="pricing" type="button">{{ _t("TAB_PRICING") }}</button>
   </li>
 </ul>
 
@@ -36,7 +36,7 @@
       <div class="card p-4">
         <table class="table mb-0">
           <tbody>
-            <tr><th style="width:40%">Brand</th><td>{{ product.brand or '—' }}</td></tr>
+            <tr><th style="width:40%">{{ _t("BRAND") }}</th><td>{{ product.brand or '—' }}</td></tr>
             <tr><th>Category</th><td>{{ product.category or '—' }}</td></tr>
             <tr>
               <th>Size (per package)</th>
@@ -47,21 +47,21 @@
                 {% else %}—{% endif %}
               </td>
             </tr>
-            <tr><th>Cost Price</th><td>RM{{ "%.2f"|format(product.cost_price) }}</td></tr>
+            <tr><th>{{ _t("COST_PRICE") }}</th><td>RM{{ "%.2f"|format(product.cost_price) }}</td></tr>
             <tr>
-              <th>Current Price</th>
+              <th>{{ _t("CURRENT_PRICE") }}</th>
               <td>{% if product.selling_price is not none %}RM{{ "%.2f"|format(product.selling_price) }}{% else %}—{% endif %}</td>
             </tr>
             <tr>
-              <th>Suggested Price</th>
+              <th>{{ _t("SUGGESTED_PRICE") }}</th>
               <td><strong>RM{{ "%.2f"|format(product.suggested_price) }}</strong>
                   <small class="text-muted">(cost × {{ product.target_margin }}% margin)</small></td>
             </tr>
-            <tr><th>Margin</th><td>{{ product.target_margin }}% {% if product.baseline_margin is not none %}<small class="text-muted">(baseline {{ product.baseline_margin }}%)</small>{% endif %}</td></tr>
+            <tr><th>{{ _t("MARGIN") }}</th><td>{{ product.target_margin }}% {% if product.baseline_margin is not none %}<small class="text-muted">(baseline {{ product.baseline_margin }}%)</small>{% endif %}</td></tr>
             <tr>
-              <th>Current Stock</th>
+              <th>{{ _t("CURRENT_STOCK") }}</th>
               <td>{{ inventory.current_stock|fmt_qty if inventory else '—' }}
-                  <small class="text-muted">sellable units on hand</small></td>
+                  <small class="text-muted">{{ _t("SELLABLE_UNITS") }}</small></td>
             </tr>
           </tbody>
         </table>
@@ -87,7 +87,7 @@
           </tbody>
         </table>
         {% else %}
-        <p class="text-muted mb-0">No price changes recorded yet.</p>
+        <p class="text-muted mb-0">{{ _t("NO_PRICE_CHANGES") }}</p>
         {% endif %}
       </div>
     </div>
@@ -105,7 +105,7 @@
 
   <!-- Market Summary Card (Phase 3D) -->
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">📊 Market Summary</h5>
+    <h5 class="mb-3">{{ _t("MARKET_SUMMARY") }}</h5>
     <div id="stats-body">
       {% if stats and stats.n > 0 %}
       <div class="row g-3">
@@ -136,14 +136,14 @@
       <small class="text-muted d-block">📍 {{ stats.localization }}</small>
       {% endif %}
       {% else %}
-      <p class="text-muted mb-0">No verified market data yet — verify a suggestion above to see the market summary.</p>
+      <p class="text-muted mb-0">{{ _t("NO_MARKET_DATA_YET") }} — verify a suggestion above to see the market summary.</p>
       {% endif %}
     </div>
   </div>
 
   <!-- Verified links -->
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">✅ Verified Market Links</h5>
+    <h5 class="mb-3">{{ _t("VERIFIED_MARKET_LINKS") }}</h5>
     <div id="verified-list">
       {% if verified %}
       <table class="table table-sm align-middle mb-0">
@@ -174,14 +174,14 @@
         </tbody>
       </table>
       {% else %}
-      <p class="text-muted mb-0">No verified market links yet — confirm a suggestion below to anchor this product to real market data.</p>
+      <p class="text-muted mb-0">{{ _t("NO_VERIFIED_LINKS") }} — confirm a suggestion below to anchor this product to real market data.</p>
       {% endif %}
     </div>
   </div>
 
   <!-- Recent Competitor Observations (Explainable AI transparency) -->
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">📋 Recent Competitor Pricing <small class="text-muted">(KPDN Open Data)</small></h5>
+    <h5 class="mb-3">{{ _t("RECENT_COMPETITOR_PRICING") }} <small class="text-muted">(KPDN Open Data)</small></h5>
     <div id="observations-body">
       {% if stats and stats.recent_observations is defined and stats.recent_observations %}
       <p class="text-muted mb-2">Showing {{ stats.recent_observations|length }} of {{ stats.n }} observations used to calculate the market summary above.</p>
@@ -213,14 +213,14 @@
       <small class="text-muted d-block mt-2">… and {{ stats.n - stats.recent_observations|length }} more observations (showing most recent {{ stats.recent_observations|length }}).</small>
       {% endif %}
       {% else %}
-      <p class="text-muted mb-0">No detailed observations available. Verify a market match to see the underlying KPDN price data.</p>
+      <p class="text-muted mb-0">{{ _t("NO_COMPETITOR_DATA") }}. Verify a market match to see the underlying KPDN price data.</p>
       {% endif %}
     </div>
   </div>
 
   <!-- Suggested links -->
   <div class="card p-4">
-    <h5 class="mb-3">💡 Suggested Matches</h5>
+    <h5 class="mb-3">{{ _t("SUGGESTED_MATCHES") }}</h5>
     <div id="suggested-list">
       {% if suggested %}
       <table class="table table-sm align-middle mb-0">
@@ -252,7 +252,7 @@
         </tbody>
       </table>
       {% else %}
-      <p class="text-muted mb-0">No suggestions yet.{% if can_edit %} Click “Search market matches” to find candidates.{% endif %}</p>
+      <p class="text-muted mb-0">{{ _t("NO_SUGGESTIONS_YET") }}{% if can_edit %} Click “Search market matches” to find candidates.{% endif %}</p>
       {% endif %}
     </div>
   </div>
@@ -261,7 +261,7 @@
 <!-- ============ TAB: PRICING RECOMMENDATION ============ -->
 <div class="tab-pane" id="pane-pricing">
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">💡 AI Price Recommendation</h5>
+    <h5 class="mb-3">{{ _t("AI_PRICE_RECOMMENDATION") }}</h5>
     <div id="pricing-body">
       {% if pricing %}
       <div class="row align-items-center mb-3">
@@ -314,7 +314,7 @@
 
       <small class="text-muted d-block">Cost floor: RM{{ "%.2f"|format(pricing.cost_floor) }} · Stock: {{ pricing.stock_level }} units · Velocity: ~{{ pricing.sales_velocity }}/day</small>
       {% else %}
-      <p class="text-muted mb-0">Pricing recommendation unavailable.</p>
+      <p class="text-muted mb-0">{{ _t("PRICING_UNAVAILABLE") }}</p>
       {% endif %}
     </div>
   </div>
@@ -322,7 +322,7 @@
   <!-- Reasoning -->
   {% if pricing and pricing.reasoning %}
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">📊 Why this price?</h5>
+    <h5 class="mb-3">{{ _t("WHY_THIS_PRICE") }}</h5>
     <ul class="mb-0">
       {% for r in pricing.reasoning %}
       <li>{{ r }}</li>
@@ -334,7 +334,7 @@
   <!-- Feature Importances -->
   {% if pricing and pricing.feature_importances %}
   <div class="card p-4">
-    <h5 class="mb-3">🔧 Key Factors</h5>
+    <h5 class="mb-3">{{ _t("KEY_FACTORS") }}</h5>
     {% for name, imp in pricing.feature_importances.items() %}
     <div class="d-flex align-items-center mb-2">
       <span style="min-width:160px">{{ name.replace('_', ' ').title() }}</span>
@@ -354,6 +354,62 @@
     const PRODUCT_ID = {{ product.id }};
     const CAN_EDIT = {{ 'true' if can_edit else 'false' }};
     const CSRF = '{{ csrf_token() }}';
+
+    // Translations for JS render functions
+    const T = {
+        MARKET_ITEM: '{{ _t("MARKET_ITEM") }}',
+        PACKAGE: '{{ _t("PACKAGE") }}',
+        CATEGORY: '{{ _t("CATEGORY") }}',
+        MARKET_PRICE: '{{ _t("MARKET_PRICE") }}',
+        PER_UNIT: '{{ _t("PER_UNIT") }}',
+        ACTIONS: '{{ _t("ACTIONS") }}',
+        REMOVE: '{{ _t("REMOVE") }}',
+        VERIFY: '{{ _t("VERIFY") }}',
+        REJECT: '{{ _t("REJECT") }}',
+        MARKET_RANGE: '{{ _t("MARKET_RANGE") }}',
+        OBSERVATIONS: '{{ _t("OBSERVATIONS") }}',
+        MEDIAN: '{{ _t("MEDIAN") }}',
+        MEAN: '{{ _t("MEAN") }}',
+        SPREAD: '{{ _t("SPREAD") }}',
+        YOUR_PRICE_VS_MEDIAN: '{{ _t("YOUR_PRICE_VS_MEDIAN") }}',
+        AT_MARKET_MEDIAN: '{{ _t("AT_MARKET_MEDIAN") }}',
+        ABOVE_MEDIAN: '{{ _t("ABOVE_MEDIAN") }}',
+        BELOW_MEDIAN: '{{ _t("BELOW_MEDIAN") }}',
+        SET_PRICE_TO_COMPARE: '{{ _t("SET_PRICE_TO_COMPARE") }}',
+        NO_MARKET_DATA_YET: '{{ _t("NO_MARKET_DATA_YET") }}',
+        NO_VERIFIED_LINKS: '{{ _t("NO_VERIFIED_LINKS") }}',
+        NO_SUGGESTIONS_YET: '{{ _t("NO_SUGGESTIONS_YET") }}',
+        CLICK_SEARCH_TO_FIND: '{{ _t("CLICK_SEARCH_TO_FIND") }}',
+        CONFIDENCE_LABEL: '{{ _t("CONFIDENCE_LABEL") }}',
+        RECOMMENDED_PRICE: '{{ _t("RECOMMENDED_PRICE") }}',
+        YOUR_CURRENT_PRICE: '{{ _t("YOUR_CURRENT_PRICE") }}',
+        DIFFERENCE: '{{ _t("DIFFERENCE") }}',
+        BELOW_YOUR_PRICE: '{{ _t("BELOW_YOUR_PRICE") }}',
+        ABOVE_YOUR_PRICE: '{{ _t("ABOVE_YOUR_PRICE") }}',
+        SAME_AS_YOUR_PRICE: '{{ _t("SAME_AS_YOUR_PRICE") }}',
+        NO_CURRENT_PRICE_SET: '{{ _t("NO_CURRENT_PRICE_SET") }}',
+        HIGH: '{{ _t("HIGH") }}',
+        MEDIUM: '{{ _t("MEDIUM") }}',
+        LOW_CONFIDENCE: '{{ _t("LOW_CONFIDENCE") }}',
+        APPLY_RECOMMENDATION: '{{ _t("APPLY_RECOMMENDATION") }}',
+        AI_INSIGHT: '{{ _t("AI_INSIGHT") }}',
+        COST_FLOOR: '{{ _t("COST_FLOOR") }}',
+        STOCK: '{{ _t("STOCK") }}',
+        VELOCITY: '{{ _t("VELOCITY") }}',
+        PER_DAY: '{{ _t("PER_DAY") }}',
+        PRICING_UNAVAILABLE: '{{ _t("PRICING_UNAVAILABLE") }}',
+        SEARCHING: '{{ _t("SEARCHING") }}',
+        FOUND_SUGGESTIONS: '{{ _t("FOUND_SUGGESTIONS") }}',
+        SUGGESTION_PLURAL: '{{ _t("SUGGESTION_PLURAL") }}',
+        NO_MATCHES_FOUND: '{{ _t("NO_MATCHES_FOUND") }}',
+        VERIFIED_ACTION: '{{ _t("VERIFIED_ACTION") }}',
+        REJECTED_ACTION: '{{ _t("REJECTED_ACTION") }}',
+        REMOVED_ACTION: '{{ _t("REMOVED_ACTION") }}',
+        ERROR: '{{ _t("ERROR") }}',
+        LATEST: '{{ _t("LATEST") }}',
+        AVG: '{{ _t("AVG") }}',
+        OBS: '{{ _t("OBS") }}',
+    };
 
     // ---------- tab switching ----------
     document.querySelectorAll('#productTabs .nav-link').forEach(function (btn) {
@@ -535,7 +591,7 @@
         else confBadge = '<span class="badge bg-secondary">Low (' + Math.round(data.confidence_score * 100) + '%)</span>';
         var warnings = (data.warnings || []).map(function(w) { return '<div class="alert alert-warning mb-2">' + esc(w) + '</div>'; }).join('');
         var llmBlock = data.llm_explanation
-            ? '<div class="card p-4 mb-4 border-primary"><h5 class="mb-2">🤖 AI Assistant Insight</h5><p class="mb-0" style="font-size:1.05em;line-height:1.6">' + esc(data.llm_explanation) + '</p></div>'
+            ? '<div class="card p-4 mb-4 border-primary"><h5 class="mb-2">{{ _t("AI_INSIGHT") }}</h5><p class="mb-0" style="font-size:1.05em;line-height:1.6">' + esc(data.llm_explanation) + '</p></div>'
             : '';
         var applyBtn = CAN_EDIT ? '<button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>' : '';
         el.innerHTML =
