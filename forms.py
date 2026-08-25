@@ -24,6 +24,19 @@ from flask_wtf import FlaskForm
 
 from wtforms import (StringField, PasswordField, FloatField, DecimalField,
                      BooleanField, SelectField, SubmitField)
+
+# Standard Malaysian states (Peninsular + East Malaysia + Federal Territories)
+MALAYSIAN_STATES = [('', '-- Select State --'),
+    ('Johor', 'Johor'), ('Kedah', 'Kedah'), ('Kelantan', 'Kelantan'),
+    ('Melaka', 'Melaka'), ('Negeri Sembilan', 'Negeri Sembilan'),
+    ('Pahang', 'Pahang'), ('Perak', 'Perak'), ('Perlis', 'Perlis'),
+    ('Pulau Pinang', 'Pulau Pinang'), ('Sabah', 'Sabah'),
+    ('Sarawak', 'Sarawak'), ('Selangor', 'Selangor'),
+    ('Terengganu', 'Terengganu'),
+    ('W.P. Kuala Lumpur', 'W.P. Kuala Lumpur'),
+    ('W.P. Labuan', 'W.P. Labuan'),
+    ('W.P. Putrajaya', 'W.P. Putrajaya'),
+]
 #   - Each *Field = one type of input:
 #       StringField   → <input type="text">
 #       PasswordField → <input type="password"> (masked on screen)
@@ -83,6 +96,13 @@ class RegisterForm(FlaskForm):
     #     here - Optional raises StopValidation and would silently SKIP the
     #     custom validate_shop_name below (WTForms appends custom validators
     #     to the field's validator chain, after Optional).
+    state = SelectField('State', choices=MALAYSIAN_STATES, default='')
+    #   - Malaysian state for geographic market localization. Saved to
+    #     Shop.state when creating a new shop; drives the dynamic
+    #     filtering of KPDN market observations in the analysis engine.
+    district = StringField('District (optional)', validators=[Length(max=50)])
+    #   - District within the state (e.g. 'Segamat', 'Johor Bahru').
+    #     Optional: if left blank, market filtering uses state-level data.
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
     #   - Length(min=6): enforce a minimum password length on the SERVER,

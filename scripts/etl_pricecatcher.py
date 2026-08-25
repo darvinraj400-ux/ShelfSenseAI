@@ -228,16 +228,26 @@ def main():
               f'{stats["skipped_empty"]} skipped empty)')
 
         # --- 4. MarketPriceObservation --------------------------------
-        # One row per (item, date): AVG(price) across premises.
+        # Geographic-aware: one row per (item, date, state).
+        # JOIN with lookup_premise to get the state/district for each price
+        # record, enabling the market_analysis engine to filter by the
+        # shop's location (Phase 4 geographic localization).
+        #
+        # Grouping by state (not district) keeps the data volume manageable
+        # while still enabling state-level filtering. District-level data
+        # can be added later by changing the GROUP BY.
         rows = db.session.execute(text(
-            'SELECT p.item_code, p.date, AVG(p.price) AS avg_price '
+            'SELECT p.item_code, p.date, lp.state, lp.district, '
+            '       AVG(p.price) AS avg_price, COUNT(*) AS n_premises '
             'FROM price p '
-            'GROUP BY p.item_code, p.date '
-            'ORDER BY p.item_code, p.date'
+            'JOIN lookup_premise lp ON p.premise_code = lp.premise_code '
+            'WHERE lp.state IS NOT NULL '
+            'GROUP BY p.item_code, p.date, lp.state, lp.district '
+            'ORDER BY p.item_code, p.date, lp.state'
         )).fetchall()
 
         n_obs = 0
-        for item_code, obs_date, avg_price in rows:
+        for item_code, obs_date, state, district, avg_price, n_premises in rows:
             entry = item_by_code.get(item_code)
             if entry is None:
                 continue                      # price row with no catalog item
@@ -251,13 +261,15 @@ def main():
                 is_on_promo=False,
                 effective_price=reg,          # no promo in legacy data
                 normalized_unit_price=unit_price,
+                state=state,                 # geographic: state for filtering
+                district=district,           # geographic: district for filtering
                 observed_at=datetime(obs_date.year, obs_date.month,
                                      obs_date.day),
             ))
             n_obs += 1
         db.session.commit()
         print(f'MarketPriceObservations created: {n_obs} '
-              f'(one per item+date, AVG across premises)')
+              f'(one per item+date+state+district, AVG across premises)')
 
         # --- 5. Report -------------------------------------------------
         print(f'-' * 60)

@@ -132,6 +132,9 @@
         </div>
       </div>
       <small class="text-muted d-block mt-2">{{ stats.scaling_note }}</small>
+      {% if stats.localization is defined and stats.localization %}
+      <small class="text-muted d-block">📍 {{ stats.localization }}</small>
+      {% endif %}
       {% else %}
       <p class="text-muted mb-0">No verified market data yet — verify a suggestion above to see the market summary.</p>
       {% endif %}
@@ -429,7 +432,8 @@
             '<div class="col-md-2"><small class="text-muted">Spread</small><br>' + money(stats.spread) + '</div>' +
             '<div class="col-md-3"><small class="text-muted">Your price vs median</small><br>' + badge + '</div>' +
             '</div>' +
-            '<small class="text-muted d-block mt-2">' + esc(stats.scaling_note || '') + '</small>';
+            '<small class="text-muted d-block mt-2">' + esc(stats.scaling_note || '') + '</small>' +
+            (stats.localization ? '<small class="text-muted d-block">📍 ' + esc(stats.localization) + '</small>' : '');
     }
 
     function applyState(data) {

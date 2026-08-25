@@ -352,7 +352,7 @@ def _compute_confidence(has_market_data, has_model, guardrails_triggered):
 # MAIN RECOMMENDATION FUNCTION
 # -------------------------------------------------
 
-def get_price_recommendation(product_id):
+def get_price_recommendation(product_id, shop=None):
     """Generate a comprehensive price recommendation for one shop product.
 
     This is the primary entry point called by the API route and the
@@ -392,8 +392,10 @@ def get_price_recommendation(product_id):
     inventory = Inventory.query.filter_by(product_id=product_id).first()
     stock_level = int(inventory.current_stock) if inventory else 0
 
-    # --- STEP 2: Load market statistics (Phase 3D) ---
-    market = get_market_stats(product_id)
+    # --- STEP 2: Load market statistics (Phase 3D) with geo-filtering ---
+    # Pass the shop object so market_analysis can filter observations
+    # by the shop's state/district (3-tier geographic fallback).
+    market = get_market_stats(product_id, shop)
     has_market_data = market.get("n", 0) > 0
 
     # --- STEP 3: Estimate sales velocity ---

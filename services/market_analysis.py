@@ -186,7 +186,107 @@ def _pkg_label(market_item):
     Used in the UI to display what size the market item represents.
     """
     qty = float(market_item.package_quantity)
-    return f"{_fmt_qty(qty)} {market_item.package_unit}".strip()
+    return f"{_fmt_qty(qty)} {market_item.package_unit}".strip()# -------------------------------------------------
+# GEOGRAPHIC FILTERING (Phase 4 Add-on)
+#
+# When the shop has a geographic location (Shop.state), the engine
+# filters market observations to match that region. This ensures the
+# market median and ML features are hyper-localized to the user's
+# actual area — prices in Kuala Lumpur may differ significantly from
+# rural Johor.
+#
+# FALLBACK CHAIN:
+#   1. Try district-level filtering (narrowest, most relevant)
+#   2. If insufficient data (< 3 observations), fall back to state-level
+#   3. If no state data, fall back to national (all observations)
+#
+# This ensures the UI never shows empty data for shops in less-
+# represented regions while still prioritizing local pricing.
+# -------------------------------------------------
+
+# Minimum number of observations needed for meaningful statistics.
+# Below this threshold, we fall back to a broader geographic scope.
+_MIN_OBSERVATIONS = 3
+
+
+def _build_observation_query(market_item_id, state=None, district=None):
+    """Build a SQLAlchemy query for market observations with geographic filters.
+
+    This helper constructs a reusable query object that can be filtered by
+    state and/or district. The query always joins through MarketItem to
+    MarketSource to ensure only observations from active sources are returned.
+
+    Args:
+        market_item_id: The integer ID of the MarketItem to query observations for.
+        state: Optional state string to filter observations by (e.g. 'Johor').
+        district: Optional district string to filter by (e.g. 'Segamat').
+
+    Returns:
+        A SQLAlchemy query object that can be further filtered or executed.
+    """
+    query = (MarketPriceObservation.query
+             .join(MarketItem)
+             .join(MarketSource)
+             .filter(
+                 MarketPriceObservation.market_item_id == market_item_id,
+                 MarketSource.is_active.is_(True)))
+
+    # Apply geographic filters progressively — state narrows first,
+    # then district further restricts if provided.
+    if state:
+        query = query.filter(MarketPriceObservation.state == state)
+    if district:
+        query = query.filter(MarketPriceObservation.district == district)
+
+    return query.order_by(MarketPriceObservation.observed_at.asc())
+
+
+def _fetch_localized_observations(market_item_id, shop=None):
+    """Fetch price observations for a market item with geographic fallback.
+
+    Implements the 3-tier geographic fallback chain:
+      1. If shop has state+district: try district-level first
+      2. If insufficient district data: fall back to state-level
+      3. If no state data (or no state matches): fall back to national
+
+    Args:
+        market_item_id: The integer ID of the MarketItem.
+        shop: Optional Shop ORM object with .state and .district attributes.
+              If None or has no location data, returns all observations.
+
+    Returns:
+        A tuple of (observations_list, localization_string) where the
+        localization string describes the geographic scope used.
+    """
+    # Extract geographic info from the shop object.
+    shop_state = getattr(shop, 'state', None)
+    shop_district = getattr(shop, 'district', None)
+
+    # If no location data at all, return all observations (national scope).
+    if not shop_state:
+        obs = _build_observation_query(market_item_id).all()
+        return obs, 'national'
+
+    # TIER 1: Try district-level filtering (most localized, most relevant).
+    if shop_district:
+        obs = _build_observation_query(market_item_id,
+                                       state=shop_state,
+                                       district=shop_district).all()
+        # Only use district data if we have enough observations for
+        # meaningful statistics — otherwise fall back to state.
+        if len(obs) >= _MIN_OBSERVATIONS:
+            return obs, f'{shop_district}, {shop_state}'
+
+    # TIER 2: Fall back to state-level filtering.
+    obs = _build_observation_query(market_item_id,
+                                   state=shop_state).all()
+    if len(obs) >= _MIN_OBSERVATIONS:
+        return obs, shop_state
+
+    # TIER 3: Fall back to national (all observations).
+    # This ensures shops in under-represented regions still get data.
+    obs = _build_observation_query(market_item_id).all()
+    return obs, 'national (no local data)'
 
 
 # -------------------------------------------------
@@ -195,18 +295,26 @@ def _pkg_label(market_item):
 # This function queries the database to collect all relevant
 # market observations and passes them to compute_metrics().
 # -------------------------------------------------
-
-def get_market_stats(product_id):
+def get_market_stats(product_id, shop=None):
     """Aggregate statistics for one shop product's verified market matches.
 
     This is the main entry point used by the API route and the product
     detail page. It:
       1. Loads the product and computes its base package quantity.
       2. Finds all VERIFIED ProductMarketMatch rows for the product.
-      3. For each match, loads price observations from ACTIVE market sources.
+      3. For each match, loads price observations with geographic
+         filtering based on the shop's location (3-tier fallback).
       4. Scales each observation's unit price to the product's package size.
       5. Passes the scaled prices to compute_metrics() for statistics.
       6. Returns the metrics merged with product metadata and match details.
+
+    GEOGRAPHIC LOCALIZATION:
+      When the shop has a state/district set, market observations are
+      filtered to match that region. This ensures the median price
+      reflects local market conditions rather than a national average
+      that may not be relevant.
+
+      Fallback chain: district -> state -> national (broadest scope).
 
     Key behavior: NEVER raises on missing data. A product with no verified
     matches gets an all-None metrics dict with n=0, which the UI handles
@@ -214,12 +322,17 @@ def get_market_stats(product_id):
 
     Args:
         product_id: The integer ID of the shop Product.
+        shop: Optional Shop ORM object used for geographic filtering.
+              If provided and has state/district set, observations are
+              filtered to match the shop's region. If None, all
+              observations are used (backward compatible).
 
     Returns:
         A dict containing:
           - Standard compute_metrics keys (n, min, max, mean, median, etc.)
           - product_id, product_name, package_label
           - scaling_note (explains whether prices are scaled or per-base-unit)
+          - localization (description of geographic scope used)
           - shop_price (the product's current selling price)
           - has_package (bool: whether the product has a package size)
           - match_count (number of verified matches)
@@ -234,21 +347,25 @@ def get_market_stats(product_id):
                .filter_by(shop_product_id=product_id, is_verified=True)
                .all())
 
-    # Step 3: Collect scaled prices from all observations of all matches.
+    # Step 3: Collect scaled prices from all observations of all matches,
+    # using geographic localization when the shop has location data.
     scaled = []          # Market prices scaled to the product's package size
     match_meta = []      # Per-match metadata for the UI breakdown
+    primary_locale = 'national'  # Track the dominant localization scope
 
     for m in matches:
-        # Step 4: Load observations from ACTIVE market sources only.
-        # Inactive sources (e.g. a discontinued online retailer) are excluded.
-        obs_list = (MarketPriceObservation.query
-                    .join(MarketItem)
-                    .join(MarketSource)
-                    .filter(MarketPriceObservation.market_item_id ==
-                            m.market_item_id,
-                            MarketSource.is_active.is_(True))
-                    .order_by(MarketPriceObservation.observed_at.asc())
-                    .all())
+        # Step 4: Load observations with geographic fallback chain.
+        # The localization note describes whether data is local, state,
+        # or national in scope.
+        obs_list, locale_note = _fetch_localized_observations(
+            m.market_item_id, shop)
+
+        # Track the dominant locale for display purposes.
+        # If any match uses national fallback, note that in the summary.
+        if locale_note == 'national (no local data)':
+            primary_locale = 'national (no local data)'
+        elif primary_locale == 'national' and locale_note != 'national':
+            primary_locale = locale_note
 
         for obs in obs_list:
             # Step 5: Skip invalid observations (None or <= 0).
@@ -279,7 +396,23 @@ def get_market_stats(product_id):
     # Step 7: Compute statistics from the scaled prices.
     metrics = compute_metrics(scaled, shop_price)
 
-    # Step 8: Enrich metrics with product metadata and match details.
+    # Step 8: Build the localization description for the UI.
+    # This tells the user whether their market data is local, state-level,
+    # or national (and explains why if data fell back to a broader scope).
+    shop_state = getattr(shop, 'state', None) if shop else None
+    shop_district = getattr(shop, 'district', None) if shop else None
+    if shop_state:
+        if shop_district:
+            localization = (f'Filtered to {shop_district}, {shop_state}. '
+                           f'Fallback: {primary_locale}.')
+        else:
+            localization = (f'Filtered to {shop_state}. '
+                           f'Fallback: {primary_locale}.')
+    else:
+        localization = ('No shop location set — showing national market data. '
+                        'Set your shop state/district for localized pricing.')
+
+    # Step 9: Enrich metrics with product metadata and match details.
     metrics.update({
         'product_id': product.id,
         'product_name': product.name,
@@ -289,6 +422,7 @@ def get_market_stats(product_id):
                          f'({product.size_label}).' if base_qty is not None
                          else 'Product has no package size - market prices '
                               'shown per base unit (kg/l/unit).'),
+        'localization': localization,
         'shop_price': _r2(shop_price) if shop_price is not None else None,
         'has_package': base_qty is not None,
         'match_count': len(matches),

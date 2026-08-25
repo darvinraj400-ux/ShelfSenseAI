@@ -106,6 +106,15 @@ class Shop(db.Model):
     other (User.shop_id / Product.shop_id)."""
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
+    #   - Geographic location: used to filter KPDN market data to the shop's
+    #     local region (e.g. Johor / Segamat) so the market median and ML
+    #     features are hyper-localized. Both nullable because existing shops
+    #     from earlier phases have no location data yet.
+    state = db.Column(db.String(50), nullable=True)
+    #   - Malaysian state (e.g. 'Johor', 'Selangor', 'W.P. Kuala Lumpur').
+    district = db.Column(db.String(50), nullable=True)
+    #   - District within the state (e.g. 'Segamah', 'Johor Bahru').
+    #     Nullable: filtering falls back to state-level if district is NULL.
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     #   - users / products relationships come from backrefs on User and Product.
 
@@ -524,6 +533,12 @@ class MarketPriceObservation(db.Model):
     is_on_promo = db.Column(db.Boolean, nullable=False, default=False)
     effective_price = db.Column(db.Numeric(10, 2), nullable=False)  # derived, see __init__
     normalized_unit_price = db.Column(db.Numeric(10, 4), nullable=False)  # RM per base unit
+    #   - Geographic columns for localized market intelligence. The ETL
+    #     populates these from the premise's lookup_premise row so the
+    #     market_analysis service can filter by the shop's state/district.
+    #     Nullable for backwards compatibility with pre-geographic data.
+    state = db.Column(db.String(50), nullable=True, index=True)
+    district = db.Column(db.String(50), nullable=True)
     observed_at = db.Column(db.DateTime,
                             default=lambda: datetime.now(timezone.utc),
                             index=True)
@@ -769,7 +784,12 @@ def register():
             # PATH A - CREATE A NEW SHOP: creates the shop AND the registrant
             # as its OWNER. There is no public role dropdown - the owner role
             # is derived from this path, never chosen.
-            shop = Shop(name=form.shop_name.data)
+            # Geographic location: state and district drive localized market
+            # data filtering in the Market Analysis Engine (Phase 3D).
+            shop_state = (form.state.data or '').strip() or None
+            shop_district = (form.district.data or '').strip() or None
+            shop = Shop(name=form.shop_name.data,
+                        state=shop_state, district=shop_district)
             db.session.add(shop)
             db.session.flush()               # obtain shop.id for the new user
             u = User(email=email, role='owner', shop_id=shop.id)
@@ -1027,14 +1047,55 @@ def delete_product(pid):
 # -------------------------------------------------
 # PHASE 3C - PRODUCT DETAIL PAGE + MARKET INTELLIGENCE API
 # -------------------------------------------------
-def _market_state(product):
+def _market_state(product, shop=None):
     """(verified, suggested) display dicts for a product's match tab.
     Each dict carries the ProductMarketMatch row, its MarketItem, and
-    (for verified links) a market-price summary from the observations."""
+    (for verified links) a market-price summary from the observations.
+
+    When a shop with geographic data is provided, observations are
+    filtered by the shop's state/district (with fallback to state
+    and then national) so the verified market links show the most
+    relevant local pricing information.
+    """
     def obs_summary(mi):
-        rows = (MarketPriceObservation.query
-                .filter_by(market_item_id=mi.id)
-                .order_by(MarketPriceObservation.observed_at.asc()).all())
+        # Build the base query for this market item's observations.
+        query = (MarketPriceObservation.query
+                 .filter_by(market_item_id=mi.id))
+
+        # Apply geographic filtering when the shop has location data.
+        # This mirrors the 3-tier fallback used in get_market_stats.
+        if shop and getattr(shop, 'district', None) and getattr(shop, 'state', None):
+            # Tier 1: Try district-level.
+            district_rows = (query.filter_by(
+                state=shop.state, district=shop.district
+            ).order_by(MarketPriceObservation.observed_at.asc()).all())
+            if len(district_rows) >= 3:
+                rows = district_rows
+            else:
+                # Tier 2: Fall back to state-level.
+                state_rows = (query.filter_by(
+                    state=shop.state
+                ).order_by(MarketPriceObservation.observed_at.asc()).all())
+                if len(state_rows) >= 3:
+                    rows = state_rows
+                else:
+                    # Tier 3: National fallback.
+                    rows = (query.order_by(
+                        MarketPriceObservation.observed_at.asc()).all())
+        elif shop and getattr(shop, 'state', None):
+            # Only state is available — skip district tier.
+            state_rows = (query.filter_by(
+                state=shop.state
+            ).order_by(MarketPriceObservation.observed_at.asc()).all())
+            if len(state_rows) >= 3:
+                rows = state_rows
+            else:
+                rows = (query.order_by(
+                    MarketPriceObservation.observed_at.asc()).all())
+        else:
+            # No location data — show all observations (national).
+            rows = query.order_by(MarketPriceObservation.observed_at.asc()).all()
+
         if not rows:
             return None
         prices = [float(r.regular_price) for r in rows]
@@ -1089,10 +1150,11 @@ def _market_json(product):
     """JSON payload of a product's full match state (verified + suggested)
     plus the Phase 3D market statistics - so the frontend can refresh the
     Market Summary card after every verify/reject/remove/search action."""
-    verified, suggested = _market_state(product)
+    verified, suggested = _market_state(product, product.shop)
     return jsonify({'verified': [_serialize_match(s) for s in verified],
                     'suggested': [_serialize_match(s) for s in suggested],
-                    'stats': get_market_stats(product.id)})
+                    'stats': get_market_stats(product.id,
+                                              product.shop)})
 
 
 @app.route('/api/product/<int:pid>/market-stats', methods=['GET'])
@@ -1103,7 +1165,7 @@ def api_product_market_stats(pid):
     p = Product.query.get_or_404(pid)
     if p.shop_id != current_user.shop_id:
         abort(403)
-    return jsonify(get_market_stats(p.id))
+    return jsonify(get_market_stats(p.id, p.shop))
 
 
 @app.route('/product/<int:pid>')
@@ -1117,9 +1179,9 @@ def product_detail(pid):
     inv = Inventory.query.filter_by(product_id=p.id).first()
     history = (PriceHistory.query.filter_by(product_id=p.id)
                .order_by(PriceHistory.created_at.desc()).limit(10).all())
-    verified, suggested = _market_state(p)
-    stats = get_market_stats(p.id)
-    pricing = get_price_recommendation(p.id)
+    verified, suggested = _market_state(p, p.shop)
+    stats = get_market_stats(p.id, p.shop)
+    pricing = get_price_recommendation(p.id, shop=p.shop)
     return render_template('product_detail.html', product=p, inventory=inv,
                            history=history, verified=verified,
                            suggested=suggested, stats=stats,

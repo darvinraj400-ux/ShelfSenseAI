@@ -17,13 +17,33 @@
             {% endfor %}
           </div>
 
-          <div id="shop-fields" class="mb-3" style="display:none">
-            {{ form.shop_name.label(class="form-label") }}
-            {{ form.shop_name(class="form-control" + (" is-invalid" if form.shop_name.errors else ""), placeholder="e.g. Demo Retail Shop") }}
-            <div class="form-text">Your new shop is created when you register — you become its Owner.</div>
-            {% for error in form.shop_name.errors %}
-              <div class="invalid-feedback d-block">{{ error }}</div>
-            {% endfor %}
+          <div id="shop-fields" style="display:none">
+            <div class="mb-3">
+              {{ form.shop_name.label(class="form-label") }}
+              {{ form.shop_name(class="form-control" + (" is-invalid" if form.shop_name.errors else ""), placeholder="e.g. Demo Retail Shop") }}
+              <div class="form-text">Your new shop is created when you register — you become its Owner.</div>
+              {% for error in form.shop_name.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                {{ form.state.label(class="form-label") }}
+                {{ form.state(class="form-select" + (" is-invalid" if form.state.errors else "")) }}
+                <div class="form-text">Used to match local KPDN market prices.</div>
+                {% for error in form.state.errors %}
+                  <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-md-6 mb-3">
+                {{ form.district.label(class="form-label") }}
+                {{ form.district(class="form-control", placeholder="e.g. Segamat") }}
+                <div class="form-text">Optional — for hyper-local pricing.</div>
+                {% for error in form.district.errors %}
+                  <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %}
+              </div>
+            </div>
           </div>
 
           <div id="employee-note" class="alert alert-info py-2 small" style="display:none">

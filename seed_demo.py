@@ -36,6 +36,8 @@ from app import app, db, Shop, User, Product, PriceHistory, Inventory, Inventory
 
 DEMO_PASSWORD = "Demo1234!"  # demo-only password, all three accounts
 DEMO_SHOP_NAME = "Demo Retail Shop"
+DEMO_SHOP_STATE = "Johor"
+DEMO_SHOP_DISTRICT = "Segamat"
 
 DEMO_USERS = [
     ("owner@demo.my",   "owner",   "Shop Owner — full control"),
@@ -125,12 +127,19 @@ def seed():
         # ---- the shared shop ----
         shop = Shop.query.filter_by(name=DEMO_SHOP_NAME).first()
         if shop is None:
-            shop = Shop(name=DEMO_SHOP_NAME)
+            shop = Shop(name=DEMO_SHOP_NAME, state=DEMO_SHOP_STATE,
+                        district=DEMO_SHOP_DISTRICT)
             db.session.add(shop)
             db.session.flush()
-            print(f"  + shop {DEMO_SHOP_NAME}")
+            print(f"  + shop {DEMO_SHOP_NAME} ({DEMO_SHOP_STATE}, {DEMO_SHOP_DISTRICT})")
         else:
-            print(f"  = shop {DEMO_SHOP_NAME} exists (id={shop.id})")
+            # Patch location if missing (shops from earlier runs).
+            if not shop.state:
+                shop.state = DEMO_SHOP_STATE
+                shop.district = DEMO_SHOP_DISTRICT
+                print(f"  ~ shop {DEMO_SHOP_NAME} location set to {DEMO_SHOP_STATE}, {DEMO_SHOP_DISTRICT}")
+            else:
+                print(f"  = shop {DEMO_SHOP_NAME} exists (id={shop.id}, {shop.state}/{shop.district})")
 
         # ---- users (all attached to the same shop) ----
         users = {}
@@ -228,7 +237,7 @@ def seed():
 
         db.session.commit()
         print("\n[DONE] Demo data ready.")
-        print(f"   Shop:   {DEMO_SHOP_NAME} (id={shop.id})")
+        print(f"   Shop:   {DEMO_SHOP_NAME} (id={shop.id}, {shop.state}/{shop.district})")
         print("   Login:  owner@demo.my / manager@demo.my / staff@demo.my")
         print(f"   Password (all): {DEMO_PASSWORD}")
 
