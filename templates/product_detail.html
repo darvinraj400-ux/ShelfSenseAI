@@ -179,6 +179,45 @@
     </div>
   </div>
 
+  <!-- Recent Competitor Observations (Explainable AI transparency) -->
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">📋 Recent Competitor Pricing <small class="text-muted">(KPDN Open Data)</small></h5>
+    <div id="observations-body">
+      {% if stats and stats.recent_observations is defined and stats.recent_observations %}
+      <p class="text-muted mb-2">Showing {{ stats.recent_observations|length }} of {{ stats.n }} observations used to calculate the market summary above.</p>
+      <div class="table-responsive">
+        <table class="table table-sm table-striped mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Date</th>
+              <th>Product</th>
+              <th>Package</th>
+              <th>Location</th>
+              <th class="text-end">Price (RM)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for obs in stats.recent_observations %}
+            <tr>
+              <td>{{ obs.date }}</td>
+              <td><small>{{ obs.item }}</small></td>
+              <td>{{ obs.package }}</td>
+              <td><small>{{ obs.location }}</small></td>
+              <td class="text-end"><strong>RM{{ "%.2f"|format(obs.price) }}</strong></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if stats.n > stats.recent_observations|length %}
+      <small class="text-muted d-block mt-2">… and {{ stats.n - stats.recent_observations|length }} more observations (showing most recent {{ stats.recent_observations|length }}).</small>
+      {% endif %}
+      {% else %}
+      <p class="text-muted mb-0">No detailed observations available. Verify a market match to see the underlying KPDN price data.</p>
+      {% endif %}
+    </div>
+  </div>
+
   <!-- Suggested links -->
   <div class="card p-4">
     <h5 class="mb-3">💡 Suggested Matches</h5>

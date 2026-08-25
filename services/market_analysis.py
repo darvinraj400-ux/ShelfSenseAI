@@ -349,8 +349,11 @@ def get_market_stats(product_id, shop=None):
 
     # Step 3: Collect scaled prices from all observations of all matches,
     # using geographic localization when the shop has location data.
+    # Also collect raw observation metadata for the transparency table
+    # (Explainable AI: shows the user the actual data points driving stats).
     scaled = []          # Market prices scaled to the product's package size
     match_meta = []      # Per-match metadata for the UI breakdown
+    raw_observations = [] # Raw observation dicts for the transparency table
     primary_locale = 'national'  # Track the dominant localization scope
 
     for m in matches:
@@ -380,6 +383,20 @@ def get_market_stats(product_id, shop=None):
             else:
                 # NO PACKAGE: Compare per base unit (no scaling possible).
                 scaled.append(float(up))
+
+            # Collect raw observation for the transparency table.
+            # This gives users visibility into the actual KPDN data points
+            # that feed the market summary statistics.
+            raw_observations.append({
+                'date': obs.observed_at.strftime('%d %b %Y')
+                        if obs.observed_at else '—',
+                'item': m.market_item.raw_title,
+                'package': _pkg_label(m.market_item),
+                'price': round(float(obs.regular_price), 2),
+                'location': ', '.join(filter(None, [
+                    getattr(obs, 'district', None),
+                    getattr(obs, 'state', None)])) or 'National',
+            })
 
         # Record per-match metadata for the UI breakdown card.
         match_meta.append({
@@ -412,7 +429,10 @@ def get_market_stats(product_id, shop=None):
         localization = ('No shop location set — showing national market data. '
                         'Set your shop state/district for localized pricing.')
 
-    # Step 9: Enrich metrics with product metadata and match details.
+    # Step 9: Enrich metrics with product metadata, match details, and
+    # recent observations for the Explainable AI transparency table.
+    # Raw observations are sorted newest-first and capped at 15 to
+    # prevent UI clutter while still showing enough data for trust.
     metrics.update({
         'product_id': product.id,
         'product_name': product.name,
@@ -427,6 +447,7 @@ def get_market_stats(product_id, shop=None):
         'has_package': base_qty is not None,
         'match_count': len(matches),
         'matches': match_meta,
+        'recent_observations': raw_observations[:15],
     })
 
     return metrics
