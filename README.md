@@ -14,7 +14,7 @@ ShelfSenseAI follows a decoupled architecture, separating core retail management
 
 *   **Backend:** Python 3, Flask, SQLAlchemy, MySQL
 *   **Machine Learning:** Scikit-learn (RandomForestRegressor)
-*   **AI Integration:** Google GenAI SDK (Gemini 1.5 Flash)
+*   **AI Integration:** Google GenAI SDK (Gemini 3.5 Flash Lite)
 *   **Data Matching:** RapidFuzz
 *   **Frontend:** HTML5, Bootstrap 5, Chart.js, Vanilla JS (Fetch API)
 *   **Testing:** Pytest
@@ -29,11 +29,12 @@ ShelfSenseAI follows a decoupled architecture, separating core retail management
     ```
 2.  **Environment Variables:**
     Create a `.env` file based on `.env.example`. Include your database URI, Flask Secret Key, and `GEMINI_API_KEY`.
-3.  **Database Migration & Seeding:**
+3.  **Database Migration & Data Loading:**
     ```bash
     flask db upgrade
-    python seed_demo.py        # Generates shops, users, and clean demo products
-    python etl_pricecatcher.py # Runs the idempotent Market Data ETL pipeline
+    python import_pricecatcher.py   # Downloads PriceCatcher data from government open-data portal
+    python scripts/etl_pricecatcher.py  # Transforms legacy data into Phase 3A market schema
+    python seed_demo.py             # Generates shops, users, and clean demo products
     ```
 4.  **Run the Application:**
     ```bash

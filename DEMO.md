@@ -3,9 +3,10 @@
 This script is designed for the Final Year Project demonstration. It follows a logical flow to showcase the system's progression from basic management to AI decision support.
 
 ## Preparations Before Demo
-1. Run `python seed_demo.py` to ensure clean products and realistic stock levels.
-2. Run `python etl_pricecatcher.py` to ensure market data is populated.
-3. Log in as the Owner of the seeded demo shop.
+1. Run `python import_pricecatcher.py` to download and load PriceCatcher data from the government portal.
+2. Run `python scripts/etl_pricecatcher.py` to transform raw data into the market intelligence schema.
+3. Run `python seed_demo.py` to ensure clean products and realistic stock levels.
+4. Log in as the Owner of the seeded demo shop.
 
 ## Step 1: The Dashboard (Phase 4A)
 *   **Action:** Navigate to `Dashboard`.
