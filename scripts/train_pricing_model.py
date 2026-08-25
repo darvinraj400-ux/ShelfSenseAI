@@ -1,276 +1,426 @@
 """
 ============================================================
- ShelfSenseAI — Phase 3E: Pricing Model Training Script
+ ShelfSenseAI - ML Training Pipeline (KPDN Big Data Edition)
 ============================================================
 
-This script generates synthetic historical sales data using real PriceCatcher
-market observations, then trains a RandomForestRegressor to predict optimal
-selling prices.
+Trains the RandomForestRegressor on REAL historical KPDN PriceCatcher data
+spanning January 2022 to August 2026 (~4.5 years, 56 monthly files).
 
-THE COLD-START PROBLEM
-----------------------
-ShelfSenseAI is a new system with no real historical sales data. To train
-a machine learning model, we need training examples. This script solves the
-"cold-start problem" by generating SYNTHETIC training data that blends:
-  - Real market prices from PriceCatcher (actual government data)
-  - Simulated shop scenarios (cost, margin, stock, velocity)
+This replaces the previous synthetic-data approach with actual government
+market data, giving the model real-world pricing distributions to learn from.
 
-Each synthetic scenario represents a plausible shop configuration, and the
-"optimal price" label is computed using a deterministic formula that balances:
-  1. Covering cost with the desired margin
-  2. Staying competitive with the market median
-  3. Adjusting for inventory levels (high stock -> nudge price down)
+MEMORY-EFFICIENT PIPELINE
+--------------------------
+Instead of loading all 56 files into memory at once, each month is:
+  1. Downloaded individually.
+  2. Merged with item + premise lookups.
+  3. Filtered for Johor state.
+  4. Aggregated by item_code + date.
+  5. Appended to a running list of aggregated rows.
 
-TRAINING PIPELINE
------------------
-1. Load real market data from the database (MarketItem + MarketPriceObservation).
-2. For each market item, generate N_SAMPLES_PER_ITEM synthetic shop scenarios.
-3. Engineer 13 features matching the inference schema.
-4. Split into train/test sets (80/20).
-5. Train a RandomForestRegressor (100 trees, max_depth=10).
-6. Evaluate (MAE, R²) and save to ml/pricing_model.pkl.
+This means we never hold more than ~1 month of raw data in memory.
+
+FULL PIPELINE
+-------------
+1. Download lookup tables (item catalog + premise directory) from data.gov.my.
+2. For each of 56 monthly files:
+   a. Download the parquet file.
+   b. Merge with lookups to get item names and premise locations.
+   c. Filter for Johor state.
+   d. Aggregate by item_code + date: compute market_median, min, max, spread.
+3. Combine all monthly aggregates.
+4. Simulate shop cost_price (80-90% of market price) as training label basis.
+5. Generate multiple shop scenarios per item-date (varying margin, stock, velocity).
+6. Train RandomForestRegressor on the resulting feature matrix.
+7. Evaluate and save to ml/pricing_model.pkl.
 
 USAGE
 -----
-    ./venv/Scripts/python scripts/train_pricing_model.py
+    python scripts/train_pricing_model.py
 
-The model file (ml/pricing_model.pkl) is idempotent — re-running regenerates
-synthetic data and retrains. The file is excluded from version control
-(.gitignore) because it is a generated artifact.
-
-NOTE: This script must be run AFTER the ETL pipeline (scripts/etl_pricecatcher.py)
-has populated the MarketItem and MarketPriceObservation tables.
+The model file is idempotent - re-running overwrites the previous version.
+Excluded from version control (.gitignore).
 ============================================================
 """
 import os
 import sys
+import re
 import random
 import warnings
+from datetime import datetime
 
 import numpy as np
+import pandas as pd
 import joblib
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # ---------------------------------------------------------------------------
-# App context setup — we need the real DB to read PriceCatcher observations.
-# The project root is added to sys.path so imports work from any working dir.
+# Constants
 # ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("FLASK_APP", "app.py")
+RANDOM_SEED = 42
+BASE_URL = "https://storage.data.gov.my/pricecatcher/"
 
-from app import (  # noqa: E402
-    app, db, MarketItem, MarketPriceObservation, MarketSource
-)
-from utils.normalization import normalize_package_size  # noqa: E402
+# Date range: January 2022 to August 2026
+START_YEAR, START_MONTH = 2022, 1
+END_YEAR, END_MONTH = 2026, 8
 
+# Localization filter: Johor state, Segamat district (if available)
+TARGET_STATE = "Johor"
+TARGET_DISTRICT = "Segamat"  # Used if district column exists
 
-# ---------------------------------------------------------------------------
-# CONSTANTS — Training configuration
-# ---------------------------------------------------------------------------
-RANDOM_SEED = 42              # Reproducibility: same seed -> same synthetic data.
-N_SAMPLES_PER_ITEM = 8        # Synthetic shop scenarios per market item.
-                                # 405 items * 8 = 3,240 total training samples.
-COST_FACTOR_RANGE = (0.7, 1.1)  # Wholesale cost as fraction of market price.
-                                  # 0.7 = 30% wholesale discount, 1.1 = 10% above market.
-MARGIN_RANGE = (5.0, 50.0)     # Target margin range (%) — covers all realistic scenarios.
-STOCK_RANGE = (0, 100)         # Inventory levels (0 = out of stock, 100 = fully stocked).
-VELOCITY_RANGE = (1, 20)       # Daily units sold (1 = slow mover, 20 = high demand).
+# Training configuration
+N_SCENARIOS_PER_ITEM_DATE = 5   # Shop scenarios per item-date aggregate
+COST_FACTOR_RANGE = (0.80, 0.90)  # cost = market_price * factor
+MARGIN_RANGE = (5.0, 50.0)        # target margin %
+STOCK_RANGE = (0, 100)
+VELOCITY_RANGE = (1, 20)
 
-# Feature names — must match the inference schema in services/pricing_engine.py
-# EXACTLY. The order determines the feature vector position in the model.
+# Minimum premises required for a data point to be considered reliable
+MIN_PREMISES = 5
+
+# Excluded item groups (fresh produce and ready-to-cook items)
+EXCLUDED_ITEM_GROUPS = {"BARANGAN SEGAR", "MAKANAN SIAP MASAK"}
+
+# Feature names - MUST match services/pricing_engine.py exactly
 FEATURE_NAMES = [
-    "cost_price",           # What the shop pays for the product (RM)
-    "target_margin",        # Desired margin percentage
-    "baseline_margin",      # Historical baseline margin (PCAPA reference)
-    "market_median",        # Median market price (scaled to product size)
-    "market_mean",          # Mean market price
-    "market_min",           # Minimum observed market price
-    "market_max",           # Maximum observed market price
-    "market_spread",        # max - min (price volatility)
-    "normalized_unit_price",# RM per base unit (kg/l/unit)
-    "stock_level",          # Current inventory quantity
-    "sales_velocity",       # Estimated daily units sold
-    "price_to_market_ratio",# cost_price / market_median
-    "quantity",             # Product package quantity
+    "cost_price",
+    "target_margin",
+    "baseline_margin",
+    "market_median",
+    "market_mean",
+    "market_min",
+    "market_max",
+    "market_spread",
+    "normalized_unit_price",
+    "stock_level",
+    "sales_velocity",
+    "price_to_market_ratio",
+    "quantity",
 ]
 
 
 # ---------------------------------------------------------------------------
-# DATA LOADING
+# Unit parsing helpers
 # ---------------------------------------------------------------------------
-
-def _load_market_data():
-    """Load all market items with their price observations from the database.
-
-    This function queries the Phase 3A market schema to extract real
-    PriceCatcher data. For each MarketItem, it collects all price
-    observations and computes per-item statistics (median, mean, min, max).
-
-    Returns:
-        A list of dicts, one per market item, containing:
-          - item_id, normalized_title, package_qty, package_unit
-          - prices: list of all observation prices
-          - median, mean, min, max: summary statistics
-          - unit_price: normalized unit price from the first observation
-
-    Raises:
-        SystemExit: If no PriceCatcher MarketSource exists (ETL not run).
-    """
-    with app.app_context():
-        # Verify that the ETL has been run (PriceCatcher source must exist).
-        source = MarketSource.query.filter_by(name="PriceCatcher").first()
-        if source is None:
-            print("ERROR: No MarketSource 'PriceCatcher' found. Run ETL first.")
-            sys.exit(1)
-
-        # Fetch all market items from the PriceCatcher source.
-        items = (MarketItem.query
-                 .filter_by(source_id=source.id)
-                 .all())
-
-        # For each item, collect and summarize its price observations.
-        item_data = []
-        for item in items:
-            # Query all observations ordered chronologically.
-            obs_list = (MarketPriceObservation.query
-                        .filter_by(market_item_id=item.id)
-                        .order_by(MarketPriceObservation.observed_at.asc())
-                        .all())
-
-            # Skip items with no observations (no price data available).
-            if not obs_list:
-                continue
-
-            # Extract valid prices (filter out None/zero values).
-            prices = [float(o.regular_price) for o in obs_list
-                      if o.regular_price and float(o.regular_price) > 0]
-
-            # Skip items where all observations are invalid.
-            if not prices:
-                continue
-
-            # Store the item's data as a structured dict.
-            item_data.append({
-                "item_id": item.id,
-                "normalized_title": item.normalized_title or "",
-                "package_qty": float(item.package_quantity) if item.package_quantity else 1.0,
-                "package_unit": (item.package_unit or "unit").lower(),
-                "prices": prices,
-                "median": float(np.median(prices)),
-                "mean": float(np.mean(prices)),
-                "min": float(np.min(prices)),
-                "max": float(np.max(prices)),
-                "unit_price": (float(obs_list[0].normalized_unit_price)
-                               if obs_list[0].normalized_unit_price else None),
-            })
-
-        return item_data
-
-
-# ---------------------------------------------------------------------------
-# SYNTHETIC DATA GENERATION
-# ---------------------------------------------------------------------------
-
-def _generate_synthetic_samples(item_data, rng):
-    """Generate synthetic training samples from real market data.
-
-    For each market item, this function simulates N_SAMPLES_PER_ITEM
-    different shop scenarios. Each scenario represents a plausible
-    shop configuration with:
-      - A wholesale cost (70-110% of market average)
-      - A target margin (5-50%)
-      - An inventory level (0-100 units)
-      - A sales velocity (1-20 units/day)
-
-    The "optimal price" label is computed deterministically using a
-    formula that balances three factors:
-      1. Cost coverage with desired margin
-      2. Market competitiveness (weighted blend with median)
-      3. Stock adjustment (high stock -> lower price to move inventory)
+def _parse_unit_quantity(unit_str):
+    """Extract numeric quantity from a unit string like '10 kg' or '500 g'.
 
     Args:
-        item_data: List of dicts from _load_market_data().
-        rng: A random.Random instance with a fixed seed for reproducibility.
+        unit_str: The raw unit string from the PriceCatcher dataset.
 
     Returns:
-        A list of dicts, each containing 13 features + the optimal_price label.
+        Float quantity, defaulting to 1.0 if parsing fails.
     """
+    if not unit_str or not isinstance(unit_str, str):
+        return 1.0
+    m = re.match(r"([0-9.]+)", unit_str.strip())
+    return float(m.group(1)) if m else 1.0
+
+
+def _parse_unit_name(unit_str):
+    """Extract unit name from a string like '10 kg' -> 'kg'.
+
+    Args:
+        unit_str: The raw unit string from the PriceCatcher dataset.
+
+    Returns:
+        Lowercase unit name string, defaulting to 'unit' if parsing fails.
+    """
+    if not unit_str or not isinstance(unit_str, str):
+        return "unit"
+    m = re.match(r"[0-9.]+\s*([a-zA-Z]+)", unit_str.strip())
+    return m.group(1).lower() if m else "unit"
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Download lookup tables
+# ---------------------------------------------------------------------------
+def download_lookups():
+    """Download the item catalog and premise directory from data.gov.my.
+
+    These are small reference tables (~757 items, ~3,895 premises) used
+    to enrich raw transaction data with item names and premise locations.
+
+    Returns:
+        Tuple of (item_df, premise_df) DataFrames.
+    """
+    print("[1/6] Downloading lookup tables...")
+
+    item_url = f"{BASE_URL}lookup_item.parquet"
+    premise_url = f"{BASE_URL}lookup_premise.parquet"
+
+    print(f"  Items:   {item_url}")
+    item_df = pd.read_parquet(item_url)
+    # Normalize item_code to int then string for consistent joins
+    item_df["item_code"] = item_df["item_code"].astype(int).astype(str)
+    print(f"  -> {len(item_df):,} items, columns: {list(item_df.columns)}")
+
+    print(f"  Premises: {premise_url}")
+    premise_df = pd.read_parquet(premise_url)
+    # Drop NaN premise codes (row -1 is junk data from the source)
+    premise_df["premise_code"] = pd.to_numeric(
+        premise_df["premise_code"], errors="coerce"
+    )
+    premise_df = premise_df.dropna(subset=["premise_code"])
+    premise_df["premise_code"] = premise_df["premise_code"].astype(int).astype(str)
+    # Filter out entries with NaN state (invalid premises)
+    premise_df = premise_df.dropna(subset=["state"])
+    print(f"  -> {len(premise_df):,} valid premises, columns: {list(premise_df.columns)}")
+
+    return item_df, premise_df
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Download and process monthly transactions (memory-efficient)
+# ---------------------------------------------------------------------------
+def download_and_process_monthly(item_df, premise_df):
+    """Download each monthly file, merge, filter, and aggregate on the fly.
+
+    Instead of loading all 56 files into memory, each month is:
+      1. Downloaded.
+      2. Merged with item + premise lookups (inner join to get state).
+      3. Filtered for Johor state.
+      4. Excluded item groups removed.
+      5. Aggregated by item_code + date (median, mean, min, max, count).
+
+    This keeps memory usage to ~1 month at a time.
+
+    Args:
+        item_df: Pre-processed item lookup DataFrame.
+        premise_df: Pre-processed premise lookup DataFrame.
+
+    Returns:
+        DataFrame with one row per item-date aggregate across all months.
+    """
+    print("\n[2/6] Downloading and processing monthly transactions...")
+
+    # Build lookup dicts for fast merging (avoids repeated DataFrame merges)
+    # premise_code -> state mapping
+    premise_state = dict(zip(premise_df["premise_code"], premise_df["state"]))
+    premise_district = dict(zip(
+        premise_df["premise_code"],
+        premise_df.get("district", pd.Series(dtype=str))
+    ))
+
+    # item_code -> (item, unit, item_group, item_category) mapping
+    item_lookup = {}
+    for _, row in item_df.iterrows():
+        item_lookup[row["item_code"]] = (
+            row["item"],
+            row["unit"],
+            row.get("item_group", ""),
+            row.get("item_category", ""),
+        )
+
+    # Collect aggregated rows from all months
+    all_agg_rows = []
+    current = datetime(START_YEAR, START_MONTH, 1)
+    end = datetime(END_YEAR, END_MONTH, 1)
+    success_count = 0
+    fail_count = 0
+    total_raw_rows = 0
+
+    while current <= end:
+        year = current.year
+        month = current.month
+        filename = f"pricecatcher_{year}-{month:02d}.parquet"
+        url = f"{BASE_URL}{filename}"
+
+        try:
+            # Download single month
+            df = pd.read_parquet(url)
+
+            # Normalize date to string (YYYY-MM-DD)
+            if "date" in df.columns:
+                df["date"] = df["date"].astype(str).str[:10]
+
+            # Normalize premise_code for lookup
+            df["premise_code"] = df["premise_code"].astype(int).astype(str)
+
+            # Normalize item_code for lookup
+            df["item_code"] = df["item_code"].astype(int).astype(str)
+
+            # Filter for valid premises in Johor (state lookup)
+            df["state"] = df["premise_code"].map(premise_state)
+            df = df.dropna(subset=["state"])
+            df = df[df["state"].str.upper() == TARGET_STATE.upper()]
+
+            if len(df) == 0:
+                fail_count += 1
+                # Advance to next month
+                if month == 12:
+                    current = datetime(year + 1, 1, 1)
+                else:
+                    current = datetime(year, month + 1, 1)
+                continue
+
+            # Add item metadata via lookup
+            df["item_meta"] = df["item_code"].map(item_lookup)
+            df = df.dropna(subset=["item_meta"])
+            df["item"] = df["item_meta"].apply(lambda x: x[0])
+            df["unit"] = df["item_meta"].apply(lambda x: x[1])
+            df["item_group"] = df["item_meta"].apply(lambda x: x[2])
+            df["item_category"] = df["item_meta"].apply(lambda x: x[3])
+            df = df.drop(columns=["item_meta", "state"])
+
+            # Filter out excluded item groups
+            df = df[~df["item_group"].isin(EXCLUDED_ITEM_GROUPS)]
+
+            # Ensure price is numeric and positive
+            df["price"] = pd.to_numeric(df["price"], errors="coerce")
+            df = df[df["price"] > 0]
+
+            total_raw_rows += len(df)
+
+            # Aggregate by item_code + date for this month
+            if len(df) > 0:
+                agg = df.groupby(["item_code", "date"]).agg(
+                    market_median=("price", "median"),
+                    market_mean=("price", "mean"),
+                    market_min=("price", "min"),
+                    market_max=("price", "max"),
+                    n_premises=("price", "count"),
+                    unit=("unit", "first"),
+                    item_category=("item_category", "first"),
+                ).reset_index()
+                agg["market_spread"] = agg["market_max"] - agg["market_min"]
+
+                # Filter unreliable aggregates (fewer than MIN_PREMISES)
+                agg = agg[agg["n_premises"] >= MIN_PREMISES]
+
+                all_agg_rows.append(agg)
+
+            success_count += 1
+            if success_count % 6 == 0:
+                print(f"  -> Processed {success_count} months so far "
+                      f"({year}-{month:02d}), {total_raw_rows:,} raw rows...")
+
+        except Exception as e:
+            fail_count += 1
+            print(f"  [SKIP] Failed: {filename} ({e})")
+
+        # Advance to next month
+        if month == 12:
+            current = datetime(year + 1, 1, 1)
+        else:
+            current = datetime(year, month + 1, 1)
+
+    print(f"\n  -> Processed {success_count} months, {fail_count} failed")
+    print(f"  -> Total raw rows processed: {total_raw_rows:,}")
+
+    if not all_agg_rows:
+        print("ERROR: No data aggregated. Check network connection.")
+        sys.exit(1)
+
+    # Combine all monthly aggregates
+    combined = pd.concat(all_agg_rows, ignore_index=True)
+
+    # Re-aggregate across months (some item-dates appear in multiple months)
+    # Final aggregation: take the median across all months for each item-date
+    final_agg = combined.groupby(["item_code", "date"]).agg(
+        market_median=("market_median", "median"),
+        market_mean=("market_mean", "mean"),
+        market_min=("market_min", "min"),
+        market_max=("market_max", "max"),
+        n_premises=("n_premises", "sum"),
+        unit=("unit", "first"),
+        item_category=("item_category", "first"),
+    ).reset_index()
+
+    final_agg["market_spread"] = final_agg["market_max"] - final_agg["market_min"]
+
+    # Compute normalized unit price
+    final_agg["parsed_qty"] = final_agg["unit"].apply(_parse_unit_quantity)
+    final_agg["parsed_unit"] = final_agg["unit"].apply(_parse_unit_name)
+    final_agg["normalized_unit_price"] = final_agg.apply(
+        lambda r: r["market_median"] / r["parsed_qty"]
+        if r["parsed_qty"] > 0 else r["market_median"],
+        axis=1,
+    )
+
+    print(f"  -> Unique item-dates: {len(final_agg):,}")
+    print(f"  -> Unique items: {final_agg['item_code'].nunique()}")
+    if len(final_agg) > 0:
+        print(f"  -> Date range: {final_agg['date'].min()} to {final_agg['date'].max()}")
+
+    return final_agg
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Generate training samples
+# ---------------------------------------------------------------------------
+def generate_samples(agg_df, rng):
+    """Generate training samples from aggregated market data.
+
+    For each item-date row, creates N_SCENARIOS_PER_ITEM_DATE shop scenarios
+    with varying cost, margin, stock, and velocity. The target label is a
+    blended optimal price balancing margin goals with market competitiveness.
+
+    Args:
+        agg_df: Aggregated features DataFrame.
+        rng: Random instance with fixed seed for reproducibility.
+
+    Returns:
+        List of dicts, each containing 13 features + optimal_price label.
+    """
+    print("\n[3/6] Generating training samples...")
+
     samples = []
+    for _, row in agg_df.iterrows():
+        market_median = float(row["market_median"])
+        market_mean = float(row["market_mean"])
+        market_min = float(row["market_min"])
+        market_max = float(row["market_max"])
+        market_spread = float(row["market_spread"])
+        unit_price = float(row["normalized_unit_price"])
+        pkg_qty = float(row["parsed_qty"])
 
-    for item in item_data:
-        # Extract pre-computed statistics for this market item.
-        market_median = item["median"]
-        market_mean = item["mean"]
-        market_min = item["min"]
-        market_max = item["max"]
-        market_spread = market_max - market_min
-        unit_price = item["unit_price"] or market_mean
-        pkg_qty = item["package_qty"]
-
-        # Generate N_SAMPLES_PER_ITEM synthetic scenarios for this item.
-        for _ in range(N_SAMPLES_PER_ITEM):
-            # --- SIMULATE SHOP COST ---
-            # Wholesale cost: 70-110% of market average.
-            # This models the reality that shops buy at varying discounts.
+        for _ in range(N_SCENARIOS_PER_ITEM_DATE):
+            # Simulate shop cost (80-90% of market price)
             cost_factor = rng.uniform(*COST_FACTOR_RANGE)
-            cost_price = market_mean * cost_factor
+            cost_price = market_median * cost_factor
 
-            # --- SIMULATE SHOP MARGIN ---
-            # Target margin: 5-50%, covering all realistic retail scenarios.
+            # Simulate target margin (5-50%)
             target_margin = rng.uniform(*MARGIN_RANGE)
-
-            # Baseline margin: same or slightly lower (simulates historical data).
-            # Used for PCAPA compliance checking.
             baseline_margin = max(5.0, target_margin - rng.uniform(0, 15))
 
-            # --- SIMULATE INVENTORY AND DEMAND ---
+            # Simulate inventory and demand
             stock_level = rng.randint(*STOCK_RANGE)
-
-            # Sales velocity: inversely correlated with price.
-            # Higher prices tend to reduce demand (basic economics).
             base_velocity = rng.uniform(*VELOCITY_RANGE)
             price_pressure = 1.0 - (target_margin / 100.0) * 0.3
             sales_velocity = max(1, int(base_velocity * price_pressure))
 
-            # Price-to-market ratio: how the shop's cost compares to the market.
+            # Price-to-market ratio
             price_to_market = cost_price / market_median if market_median > 0 else 1.0
 
-            # --- COMPUTE OPTIMAL SELLING PRICE (THE LABEL) ---
-            # The "ideal" price balances three factors:
-
-            # Factor 1: Absolute minimum (cost floor) — 5% above cost.
+            # --- Compute optimal price (the training label) ---
+            # Floor: cost * 1.05 (minimum viable margin)
             cost_floor = cost_price * 1.05
 
-            # Factor 2: Margin target price (cost * (1 + margin/100)).
+            # Margin target price
             margin_price = cost_price * (1 + target_margin / 100)
 
-            # Factor 3: Weighted blend of margin target and market median.
-            # 60% margin target + 40% market median (when market data exists).
-            # This teaches the model to balance internal goals with external reality.
+            # Blended price: 60% margin target + 40% market median
             if market_median > 0:
                 blend = 0.6 * margin_price + 0.4 * market_median
             else:
                 blend = margin_price
 
-            # Factor 4: Stock adjustment — high stock nudges price down
-            # to move inventory (basic supply-demand dynamics).
+            # Stock adjustment: high stock nudges price down
             stock_ratio = stock_level / max(STOCK_RANGE[1], 1)
-            stock_adjustment = 1.0 - (stock_ratio * 0.10)  # up to 10% discount
+            stock_adjustment = 1.0 - (stock_ratio * 0.10)
 
             optimal_price = blend * stock_adjustment
-
-            # Enforce cost floor — the label must never suggest a loss.
             optimal_price = max(optimal_price, cost_floor)
 
-            # Cap at 130% of market max to prevent extreme overpricing.
+            # Cap at 130% of market max
             if market_max > 0:
                 optimal_price = min(optimal_price, market_max * 1.3)
 
             optimal_price = round(optimal_price, 2)
 
-            # --- ASSEMBLE THE TRAINING SAMPLE ---
             samples.append({
                 "cost_price": round(cost_price, 2),
                 "target_margin": round(target_margin, 1),
@@ -288,100 +438,67 @@ def _generate_synthetic_samples(item_data, rng):
                 "optimal_price": optimal_price,
             })
 
+    print(f"  Generated {len(samples):,} training samples")
     return samples
 
 
 # ---------------------------------------------------------------------------
-# TRAINING PIPELINE
+# Step 4: Train and save
 # ---------------------------------------------------------------------------
+def train_and_save(samples):
+    """Train RandomForestRegressor and save to disk.
 
-def train():
-    """Main training pipeline: load data, generate samples, train, evaluate, save.
-
-    This function orchestrates the complete ML training process:
-      1. Load real market data from the database.
-      2. Generate synthetic training samples.
-      3. Build the feature matrix (X) and label vector (y).
-      4. Split into train/test sets (80/20).
-      5. Train a RandomForestRegressor.
-      6. Evaluate on the test set (MAE, R²).
-      7. Save the trained model to ml/pricing_model.pkl.
+    Args:
+        samples: List of training sample dicts.
 
     Returns:
-        The model payload dict containing the trained model and metadata.
+        The model payload dict.
     """
-    print("=" * 60)
-    print("ShelfSenseAI — Phase 3E Pricing Model Training")
-    print("=" * 60)
+    print("\n[4/6] Training RandomForestRegressor...")
 
-    # --- Step 1: Load real market data from the database ---
-    print("\n[1/4] Loading market data from database...")
-    item_data = _load_market_data()
-    print(f"  Loaded {len(item_data)} market items with price observations")
-
-    # Ensure we have enough data to train a meaningful model.
-    if len(item_data) < 10:
-        print("ERROR: Insufficient market data. Need at least 10 items.")
-        sys.exit(1)
-
-    # --- Step 2: Generate synthetic training samples ---
-    print("\n[2/4] Generating synthetic training samples...")
-    # Use a fixed seed for reproducibility — same seed always produces
-    # the same synthetic data, which is important for debugging.
-    rng = random.Random(RANDOM_SEED)
-    samples = _generate_synthetic_samples(item_data, rng)
-    print(f"  Generated {len(samples)} training samples from {len(item_data)} items")
-
-    # --- Step 3: Build feature matrix and label vector ---
+    # Build feature matrix and label vector
     X = np.array([[s[f] for f in FEATURE_NAMES] for s in samples])
     y = np.array([s["optimal_price"] for s in samples])
 
-    print(f"\n[3/4] Training RandomForestRegressor...")
     print(f"  Features: {len(FEATURE_NAMES)}")
-    print(f"  Samples:  {len(X)}")
+    print(f"  Samples:  {len(X):,}")
 
-    # --- Step 4: Train/test split (80/20) ---
+    # Train/test split (80/20)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_SEED
     )
 
-    # --- Step 5: Train the model ---
-    # RandomForestRegressor with 100 trees and max_depth=10.
-    # - 100 trees: enough for stable predictions without overfitting.
-    # - max_depth=10: prevents memorizing noise in the synthetic data.
-    # - n_jobs=-1: use all CPU cores for faster training.
+    # Train the model
     model = RandomForestRegressor(
-        n_estimators=100,
-        max_depth=10,
+        n_estimators=200,     # More trees for larger dataset
+        max_depth=15,         # Deeper trees for complex patterns
+        min_samples_split=5,  # Prevent overfitting on noise
         random_state=RANDOM_SEED,
-        n_jobs=-1
+        n_jobs=-1,
     )
     model.fit(X_train, y_train)
 
-    # --- Step 6: Evaluate on the test set ---
+    # Evaluate
     y_pred = model.predict(X_test)
     mae = mean_absolute_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
 
     print(f"\n  Model Performance:")
-    print(f"    MAE:  RM{mae:.4f}")  # Mean Absolute Error
-    print(f"    R\u00b2:   {r2:.4f}")  # Coefficient of determination
+    print(f"    MAE:  RM{mae:.4f}")
+    print(f"    R2:   {r2:.4f}")
 
-    # Display top 5 feature importances for interpretability.
+    # Feature importances
     importances = dict(zip(FEATURE_NAMES, model.feature_importances_))
     top_5 = sorted(importances.items(), key=lambda x: -x[1])[:5]
     print(f"\n  Top 5 Feature Importances:")
     for name, imp in top_5:
         print(f"    {name:25s} {imp:.4f}")
 
-    # --- Step 7: Save the model to disk ---
-    print(f"\n[4/4] Saving model...")
+    # Save model
     ml_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ml")
     os.makedirs(ml_dir, exist_ok=True)
     model_path = os.path.join(ml_dir, "pricing_model.pkl")
 
-    # Save a payload dict (not just the model) so we can load feature names,
-    # importances, and training metadata alongside the model.
     payload = {
         "model": model,
         "feature_names": FEATURE_NAMES,
@@ -390,19 +507,50 @@ def train():
         "mae": mae,
         "r2": r2,
         "feature_importances": importances,
+        "training_date": datetime.now().isoformat(),
+        "data_source": f"KPDN PriceCatcher {START_YEAR}-{END_YEAR}",
+        "localization": f"{TARGET_STATE}" + (f"/{TARGET_DISTRICT}" if TARGET_DISTRICT else ""),
     }
     joblib.dump(payload, model_path)
-    print(f"  Saved to: {model_path}")
+
+    print(f"\n  Saved to: {model_path}")
     print(f"  File size: {os.path.getsize(model_path) / 1024:.1f} KB")
+
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    """Execute the full Big Data training pipeline."""
+    print("=" * 60)
+    print("ShelfSenseAI - ML Training (KPDN Big Data)")
+    print(f"Data range: {START_YEAR}-{START_MONTH:02d} to {END_YEAR}-{END_MONTH:02d}")
+    print(f"Localization: {TARGET_STATE}" + (f", {TARGET_DISTRICT}" if TARGET_DISTRICT else ""))
+    print("=" * 60)
+
+    # Step 1: Download lookups
+    item_df, premise_df = download_lookups()
+
+    # Step 2: Download, merge, filter, and aggregate monthly (memory-efficient)
+    agg = download_and_process_monthly(item_df, premise_df)
+
+    if len(agg) < 50:
+        print(f"WARNING: Only {len(agg)} item-dates after aggregation. Model quality may suffer.")
+
+    # Step 3: Generate training samples
+    rng = random.Random(RANDOM_SEED)
+    samples = generate_samples(agg, rng)
+
+    # Step 4: Train and save
+    payload = train_and_save(samples)
 
     print("\n" + "=" * 60)
     print("Training complete. Model ready for inference.")
     print("=" * 60)
 
-    return payload
-
 
 if __name__ == "__main__":
-    # Suppress sklearn warnings for cleaner output.
     warnings.filterwarnings("ignore")
-    train()
+    main()
