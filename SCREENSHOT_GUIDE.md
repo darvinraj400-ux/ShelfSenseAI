@@ -8,3 +8,5 @@ When writing your final academic report, capture the following exact views to pr
 4.  **Price History / Audit Trail:** Capture a product's price history table showing old vs. new prices. *(Proves transactional correctness)*
 5.  **Employee Invitations:** Capture the Team page showing an active generated token link. *(Proves security and RBAC)*
 6.  **Form Validation:** Try to type letters into the Quantity field on the Add Product page, or set a price below the cost price, and capture the resulting UI error/guardrail. *(Proves data quality enforcement)*
+7.  **KPDN Price-Controlled Product:** Open the GULA PUTIH BERTAPIS KASAR product detail page. The Pricing Recommendation tab should show "Rule 0 (Regulatory Cap) Fired" with the price hard-capped at RM 2.85. *(Proves Malaysian legal compliance)*
+8.  **Training Metrics (Terminal):** Run `python scripts/train_pricing_model.py` and capture the final output showing MAE = RM0.0639, R² = 0.9999, and the top 5 feature importances. *(Proves ML model quality trained on real KPDN Big Data)*

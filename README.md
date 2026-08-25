@@ -8,7 +8,7 @@ ShelfSenseAI follows a decoupled architecture, separating core retail management
 
 *   **Core Retail:** Shop management, Auth, Employee roles, Inventory, Sales, Price History.
 *   **Market Intelligence:** Idempotent ETL pipeline (PriceCatcher), exact/fuzzy matching (RapidFuzz), statistical market analysis (PPI).
-*   **AI/ML Engine:** Random Forest Regressor (pricing prediction with deterministic guardrails) and Gemini LLM (3-layer fallback for natural-language explanations).
+*   **AI/ML Engine:** Random Forest Regressor trained on 4.5 years of real KPDN PriceCatcher data (2022-2026, 5.4M+ observations) with deterministic guardrails, and Gemini LLM (3-layer fallback for natural-language explanations).
 
 ## Technology Stack
 
@@ -43,5 +43,5 @@ ShelfSenseAI follows a decoupled architecture, separating core retail management
 
 ## Development Phases
 *   **Phase 1-2:** Core Foundation, Identity, Inventory, Roles & Registration.
-*   **Phase 3:** Market Intelligence, ETL, Matching, ML Pricing, and AI Explainer.
-*   **Phase 4:** Dashboard Analytics, Data Quality, Production Hardening, Testing.
+*   **Phase 3:** Market Intelligence, ETL, Matching, ML Pricing (trained on real KPDN 2022-2026 data), and AI Explainer.
+*   **Phase 4:** Dashboard Analytics, Data Quality, KPDN Price Control Guardrails, Production Hardening, Testing (144 tests).
