@@ -44,7 +44,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from forms import (LoginForm, RegisterForm, ProductForm, SaleForm,
                    InventoryAdjustmentForm, ReceiveStockForm, InviteForm,
-                   InviteAcceptForm)
+                   InviteAcceptForm, UserProfileForm, ShopSettingsForm,
+                   PreferencesForm)
 #   - Our own WTForms definitions (email format, min password length, etc.)
 from flask_migrate import Migrate          # DB schema migration tool (like git for tables)
 from flask_wtf import CSRFProtect          # cross-site request forgery protection
