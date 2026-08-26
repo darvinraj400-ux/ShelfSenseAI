@@ -44,8 +44,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from forms import (LoginForm, RegisterForm, ProductForm, SaleForm,
                    InventoryAdjustmentForm, ReceiveStockForm, InviteForm,
-                   InviteAcceptForm, UserProfileForm, ShopSettingsForm,
-                   PreferencesForm)
+                   InviteAcceptForm, UserProfileForm, ShopSettingsForm)
 #   - Our own WTForms definitions (email format, min password length, etc.)
 from flask_migrate import Migrate          # DB schema migration tool (like git for tables)
 from flask_wtf import CSRFProtect          # cross-site request forgery protection
@@ -122,17 +121,12 @@ class Shop(db.Model):
 
 class User(UserMixin, db.Model):
     """Registered users with a role: owner / manager / staff.
-    Every user belongs to exactly one Shop (shop_id).
-    preferred_language stores the user's UI language choice for
-    the 4-language localization system (EN/MS/ZH/TA)."""
+    Every user belongs to exactly one Shop (shop_id)."""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)  # never the raw password!
     role = db.Column(db.String(20), nullable=False, default='staff')  # owner | manager | staff | unassigned
     shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'), nullable=True)
-    preferred_language = db.Column(db.String(5), nullable=False, default='en')
-    #   - UI language preference: 'en' (English), 'ms' (Bahasa Melayu),
-    #     'zh' (Chinese/Mandarin), 'ta' (Tamil). Default is English.
     #   - FK to shop.id. NULL = an employee account that has NOT joined any
     #     shop yet (created via the "Join an existing shop" registration path).
     #     Shop registration creates a NEW shop and makes the registrant its
@@ -614,7 +608,7 @@ from services.market_analysis import get_market_stats   # noqa: E402
 from services.pricing_engine import (get_price_recommendation,  # noqa: E402
                                      apply_price as _apply_price)
 from services.dashboard_service import get_dashboard_metrics  # noqa: E402
-from translations import _t, LANGUAGE_NAMES, LANGUAGE_OPTIONS  # noqa: E402
+
 
 
 # -------------------------------------------------
@@ -756,25 +750,14 @@ def mark_invitation_notifications_read(inv):
 
 @app.context_processor
 def inject_unread_notifications():
-    """Expose the unread-notification count and translation helpers to every
-    template. The navbar uses these for localized UI text and the 🔔 badge."""
+    """Expose the unread-notification count to every template.
+    The navbar uses this for the 🔔 badge."""
     if current_user.is_authenticated:
-        lang = getattr(current_user, 'preferred_language', 'en') or 'en'
         return {
             'unread_notifications': Notification.query.filter_by(
                 user_id=current_user.id, is_read=False).count(),
-            'current_language': lang,
-            'language_names': LANGUAGE_NAMES,
-            'language_options': LANGUAGE_OPTIONS,
-            '_t': lambda key: _t(key, lang),
         }
-    return {
-        'unread_notifications': 0,
-        'current_language': 'en',
-        'language_names': LANGUAGE_NAMES,
-        'language_options': LANGUAGE_OPTIONS,
-        '_t': lambda key: _t(key, 'en'),
-    }
+    return {'unread_notifications': 0}
 # -------------------------------------------------
 
 
@@ -885,13 +868,12 @@ def profile():
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
-    """Tabbed settings page for account details, shop settings, and language."""
+    """Tabbed settings page for account details and shop settings."""
     active_tab = request.args.get('tab', 'account')
 
     # --- Account Details Form ---
     account_form = UserProfileForm(obj=current_user)
     shop_form = ShopSettingsForm(obj=current_user.shop if current_user.shop else None)
-    prefs_form = PreferencesForm(obj=current_user)
 
     if request.method == 'POST':
         form_type = request.form.get('form_type')
@@ -926,21 +908,10 @@ def settings():
                     flash('No shop associated with your account.', 'danger')
             active_tab = 'shop'
 
-        elif form_type == 'language' and prefs_form.validate_on_submit():
-            lang = prefs_form.preferred_language.data
-            if lang in ('en', 'ms', 'zh', 'ta'):
-                current_user.preferred_language = lang
-                db.session.commit()
-                flash('Language preference saved.', 'success')
-            else:
-                flash('Invalid language selection.', 'danger')
-            active_tab = 'language'
-
     return render_template('settings.html',
                            user=current_user,
                            account_form=account_form,
                            shop_form=shop_form,
-                           prefs_form=prefs_form,
                            active_tab=active_tab)
 
 

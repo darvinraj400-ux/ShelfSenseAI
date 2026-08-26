@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{{ _t('PROFILE') }} - ShelfSense AI{% endblock %}
+{% block title %}Profile - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>{{ _t('PROFILE') }}</h2>
+  <h2>Profile</h2>
   <div>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">{{ _t('BACK') }}</a>
-    <a href="{{ url_for('settings') }}" class="btn btn-outline-primary">{{ _t('NAV_SETTINGS') }}</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">Back</a>
+    <a href="{{ url_for('settings') }}" class="btn btn-outline-primary">Settings</a>
   </div>
 </div>
 
@@ -13,29 +13,25 @@
   <!-- Account Information Card -->
   <div class="col-md-6">
     <div class="card p-4 mb-4">
-      <h5 class="mb-3">👤 {{ _t('ACCOUNT_DETAILS') }}</h5>
+      <h5 class="mb-3">👤 Account Details</h5>
       <table class="table table-borderless mb-0">
         <tr>
-          <th style="width:40%">{{ _t('EMAIL') }}</th>
+          <th style="width:40%">Email</th>
           <td>{{ user.email }}</td>
         </tr>
         <tr>
-          <th>{{ _t('ROLE') }}</th>
+          <th>Role</th>
           <td>
             {% if user.role == 'owner' %}
-              <span class="badge bg-primary">{{ _t('OWNER') }}</span>
+              <span class="badge bg-primary">Owner</span>
             {% elif user.role == 'manager' %}
-              <span class="badge bg-success">{{ _t('MANAGER') }}</span>
+              <span class="badge bg-success">Manager</span>
             {% elif user.role == 'staff' %}
-              <span class="badge bg-secondary">{{ _t('STAFF') }}</span>
+              <span class="badge bg-secondary">Staff</span>
             {% else %}
-              <span class="badge bg-warning text-dark">{{ _t('UNASSIGNED') }}</span>
+              <span class="badge bg-warning text-dark">Unassigned</span>
             {% endif %}
           </td>
-        </tr>
-        <tr>
-          <th>{{ _t('LANGUAGE') }}</th>
-          <td>{{ language_names.get(current_language, 'English') }}</td>
         </tr>
         <tr>
           <th>Member Since</th>
@@ -52,15 +48,15 @@
       {% if user.shop %}
       <table class="table table-borderless mb-0">
         <tr>
-          <th style="width:40%">{{ _t('SHOP_NAME') }}</th>
+          <th style="width:40%">Shop Name</th>
           <td>{{ user.shop.name }}</td>
         </tr>
         <tr>
-          <th>{{ _t('STATE') }}</th>
+          <th>State</th>
           <td>{{ user.shop.state or '—' }}</td>
         </tr>
         <tr>
-          <th>{{ _t('DISTRICT') }}</th>
+          <th>District</th>
           <td>{{ user.shop.district or '—' }}</td>
         </tr>
         <tr>
@@ -73,11 +69,11 @@
         </tr>
       </table>
       {% if user.can('owner') %}
-      <a href="{{ url_for('settings', tab='shop') }}" class="btn btn-sm btn-outline-primary mt-3">{{ _t('NAV_SETTINGS') }}</a>
+      <a href="{{ url_for('settings', tab='shop') }}" class="btn btn-sm btn-outline-primary mt-3">Settings</a>
       {% endif %}
       {% else %}
       <p class="text-muted mb-0">No shop associated with this account. You are waiting for an invitation.</p>
-      <a href="{{ url_for('settings', tab='language') }}" class="btn btn-sm btn-outline-primary mt-3">{{ _t('NAV_SETTINGS') }}</a>
+      <a href="{{ url_for('settings') }}" class="btn btn-sm btn-outline-primary mt-3">Settings</a>
       {% endif %}
     </div>
   </div>

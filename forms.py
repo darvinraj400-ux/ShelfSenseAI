@@ -24,7 +24,6 @@ from flask_wtf import FlaskForm
 
 from wtforms import (StringField, PasswordField, FloatField, DecimalField,
                      BooleanField, SelectField, SubmitField)
-from translations import LANGUAGE_OPTIONS  # noqa: E402
 
 # Standard Malaysian states (Peninsular + East Malaysia + Federal Territories)
 MALAYSIAN_STATES = [('', '-- Select State --'),
@@ -264,11 +263,3 @@ class ShopSettingsForm(FlaskForm):
                                                    NumberRange(min=0, max=1000)])
     submit = SubmitField('Save Settings')
 
-
-class PreferencesForm(FlaskForm):
-    """User preferences form for language selection. Supports Malaysia's
-    4 main languages: English, Bahasa Melayu, Chinese (Mandarin), Tamil."""
-    preferred_language = SelectField('Preferred Language',
-                                     choices=LANGUAGE_OPTIONS,
-                                     validators=[DataRequired()])
-    submit = SubmitField('Save Preferences')

@@ -1,21 +1,21 @@
 {% extends "base.html" %}
-{% block title %}{{ _t('ACCEPT') }} Invitation - ShelfSense AI{% endblock %}
+{% block title %}Accept Invitation - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-6">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h3 class="mb-3">{{ _t('JOIN') }} {{ invitation.shop.name }}</h3>
-        <p>{{ _t('INVITE_DETAILS_UNCHANGEABLE') }}</p>
+        <h3 class="mb-3">Join {{ invitation.shop.name }}</h3>
+        <p>You've been invited to join this shop. The details below come from the invitation and cannot be changed:</p>
         <ul class="mb-4">
-          <li><strong>{{ _t('EMAIL') }}:</strong> {{ invitation.email }}</li>
-          <li><strong>{{ _t('SHOP_NAME') }}:</strong> {{ invitation.shop.name }}</li>
-          <li><strong>{{ _t('ROLE') }}:</strong> {{ invitation.role|title }}</li>
+          <li><strong>Email:</strong> {{ invitation.email }}</li>
+          <li><strong>Shop Name:</strong> {{ invitation.shop.name }}</li>
+          <li><strong>Role:</strong> {{ invitation.role|title }}</li>
         </ul>
 
         {% if form %}
         {# ---- mode='register': create the employee account (no shop yet) ---- #}
-        <p class="text-muted">{{ _t('CREATE_ACCOUNT_HINT') }}</p>
+        <p class="text-muted">Create your account. It is created without shop membership — after that you accept this invitation explicitly from your notifications.</p>
         <form method="POST">
           {{ form.hidden_tag() }}
 
@@ -39,15 +39,15 @@
         </form>
         {% else %}
         {# ---- mode='summary': account exists & matches - explicit Accept/Reject ---- #}
-        <p class="text-muted">{{ _t('INVITE_NOT_LINKED_HINT') }}</p>
+        <p class="text-muted">Your account is not linked to a shop yet. When an Owner invites you, the invitation will appear here for you to accept.</p>
         <div class="d-flex gap-2">
           <form method="POST" action="{{ url_for('accept_invitation_id', iid=invitation.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-success">{{ _t('ACCEPT_INVITATION') }}</button>
+            <button class="btn btn-success">Accept Invitation</button>
           </form>
           <form method="POST" action="{{ url_for('reject_invitation', iid=invitation.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-outline-danger">{{ _t('REJECT') }}</button>
+            <button class="btn btn-outline-danger">Reject</button>
           </form>
         </div>
         {% endif %}

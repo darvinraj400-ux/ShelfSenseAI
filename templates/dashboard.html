@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% block title %}{{ _t('DASHBOARD_TITLE') }} - ShelfSense AI{% endblock %}
+{% block title %}Dashboard - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>{% if current_user.shop %}{{ current_user.shop.name }}{% else %}My{% endif %} {{ _t('DASHBOARD_TITLE') }}</h2>
+  <h2>{% if current_user.shop %}{{ current_user.shop.name }}{% else %}My{% endif %} Dashboard</h2>
   {% if current_user.role in ['owner', 'manager'] %}
-  <a href="{{ url_for('new_product') }}" class="btn btn-primary">+ {{ _t('ADD_PRODUCT') }}</a>
+  <a href="{{ url_for('new_product') }}" class="btn btn-primary">+ Add Product</a>
   {% endif %}
 </div>
 
 {% if unassigned %}
 <div class="alert alert-info">
-  {{ _t('INVITE_UNASSIGNED_HINT') }}
-  <a href="{{ url_for('notifications') }}">{{ _t('NAV_NOTIFICATIONS') }}</a> 🔔
+  Your account is not linked to a shop yet. If you received an invitation, accept it from
+  <a href="{{ url_for('notifications') }}">Notifications</a> 🔔
 </div>
 {% endif %}
 
@@ -21,7 +21,7 @@
   <!-- Total Products -->
   <div class="col-md-4">
     <div class="card p-3 text-center">
-      <div class="text-muted small">{{ _t('TOTAL_PRODUCTS') }}</div>
+      <div class="text-muted small">Total Products</div>
       <h2 class="mb-0 text-primary">{{ metrics.total_products }}</h2>
     </div>
   </div>
@@ -29,14 +29,14 @@
   <!-- Low Stock Alerts -->
   <div class="col-md-4">
     <div class="card p-3 text-center">
-      <div class="text-muted small">{{ _t('LOW_STOCK_ALERTS') }}</div>
+      <div class="text-muted small">Low Stock Alerts</div>
       <h2 class="mb-0 {% if metrics.low_stock_count > 0 %}text-warning{% else %}text-success{% endif %}">
         {{ metrics.low_stock_count }}
       </h2>
       {% if metrics.low_stock_count > 0 %}
       <small class="text-muted">{{ metrics.low_stock_count }} product{{ 's' if metrics.low_stock_count != 1 }} below {{ low_stock_threshold or 10 }} units</small>
       {% else %}
-      <small class="text-muted">{{ _t('STOCK_LEVELS_HEALTHY') }}</small>
+      <small class="text-muted">All stock levels healthy</small>
       {% endif %}
     </div>
   </div>
@@ -44,9 +44,9 @@
   <!-- Total Inventory Value -->
   <div class="col-md-4">
     <div class="card p-3 text-center">
-      <div class="text-muted small">{{ _t('INVENTORY_VALUE') }}</div>
+      <div class="text-muted small">Inventory Value</div>
       <h2 class="mb-0 text-info">RM{{ "%.2f"|format(metrics.inventory_value) }}</h2>
-      <small class="text-muted">{{ _t('TOTAL_COST_STOCK') }}</small>
+      <small class="text-muted">Total cost x stock</small>
     </div>
   </div>
 </div>
@@ -55,7 +55,7 @@
 {% if metrics.action_items %}
 <div class="card mb-4 border-warning">
   <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
-    <span><strong>⚠ {{ _t('ACTION_REQUIRED') }}</strong> ({{ metrics.action_count }} item{{ 's' if metrics.action_count != 1 }})</span>
+    <span><strong>⚠ Action Required</strong> ({{ metrics.action_count }} item{{ 's' if metrics.action_count != 1 }})</span>
   </div>
   <div class="card-body p-0">
     <div class="list-group list-group-flush">
@@ -80,7 +80,7 @@
 
 <!-- ===================== PRODUCT TABLE ===================== -->
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">{{ _t('NAV_PRODUCTS') }}</h4>
+  <h4 class="mb-0">Products</h4>
 </div>
 
 {% if products %}
@@ -88,16 +88,16 @@
   <table class="table table-striped table-hover">
     <thead class="table-light">
       <tr>
-        <th>{{ _t('PRODUCT_NAME') }}</th>
-        <th>{{ _t('BRAND') }}</th>
-        <th>{{ _t('CATEGORY') }}</th>
-        <th>{{ _t('SIZE') }}</th>
-        <th>{{ _t('COST_PRICE') }}</th>
-        <th>{{ _t('SELLING_PRICE') }}</th>
-        <th>{{ _t('CURRENT_STOCK') }}</th>
-        <th>{{ _t('TARGET_MARGIN') }}</th>
-        <th>{{ _t('SUGGESTED_PRICE') }}</th>
-        <th class="text-end">{{ _t('ACTIONS') }}</th>
+        <th>Product Name</th>
+        <th>Brand</th>
+        <th>Category</th>
+        <th>Size</th>
+        <th>Cost Price (RM)</th>
+        <th>Selling Price (RM)</th>
+        <th>Current Stock</th>
+        <th>Target Margin %</th>
+        <th>Suggested Price</th>
+        <th class="text-end">Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -114,13 +114,13 @@
         <td><strong>RM{{ "%.2f"|format(p.suggested_price) }}</strong></td>
         <td class="text-end">
           {% if current_user.role in ['owner', 'manager'] %}
-          <a href="{{ url_for('edit_product', pid=p.id) }}" class="btn btn-sm btn-outline-primary">{{ _t('EDIT') }}</a>
+          <a href="{{ url_for('edit_product', pid=p.id) }}" class="btn btn-sm btn-outline-primary">Edit</a>
           <form method="POST" action="{{ url_for('delete_product', pid=p.id) }}" class="d-inline" onsubmit="return confirm('Delete this product?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-outline-danger">{{ _t('DELETE') }}</button>
+            <button class="btn btn-sm btn-outline-danger">Delete</button>
           </form>
           {% else %}
-          <span class="text-muted">{{ _t('VIEW_ONLY') }}</span>
+          <span class="text-muted">view only</span>
           {% endif %}
         </td>
       </tr>
@@ -130,9 +130,9 @@
 </div>
 {% else %}
 <div class="text-center py-5 text-muted">
-  <p>{{ _t('NO_PRODUCTS') }}</p>
+  <p>No products yet.</p>
   {% if current_user.role in ['owner', 'manager'] %}
-  <a href="{{ url_for('new_product') }}" class="btn btn-primary">{{ _t('ADD_FIRST_PRODUCT') }}</a>
+  <a href="{{ url_for('new_product') }}" class="btn btn-primary">Add your first product</a>
   {% endif %}
 </div>
 {% endif %}

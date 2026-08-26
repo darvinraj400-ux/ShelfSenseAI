@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{{ _t('NAV_SETTINGS') }} - ShelfSense AI{% endblock %}
+{% block title %}Settings - ShelfSense AI{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>{{ _t('NAV_SETTINGS') }}</h2>
+  <h2>Settings</h2>
   <div>
-    <a href="{{ url_for('profile') }}" class="btn btn-outline-secondary">{{ _t('NAV_PROFILE') }}</a>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">{{ _t('BACK') }}</a>
+    <a href="{{ url_for('profile') }}" class="btn btn-outline-secondary">Profile</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">Back</a>
   </div>
 </div>
 
@@ -13,21 +13,16 @@
 <ul class="nav nav-tabs mb-3" id="settingsTabs" role="tablist">
   <li class="nav-item" role="presentation">
     <button class="nav-link {{ 'active' if active_tab == 'account' }}" data-pane="account" type="button">
-      👤 {{ _t('ACCOUNT_DETAILS') }}
+      👤 Account Details
     </button>
   </li>
   {% if user.shop %}
   <li class="nav-item" role="presentation">
     <button class="nav-link {{ 'active' if active_tab == 'shop' }}" data-pane="shop" type="button">
-      🏪 {{ _t('SHOP_SETTINGS') }}
+      🏪 Shop Settings
     </button>
   </li>
   {% endif %}
-  <li class="nav-item" role="presentation">
-    <button class="nav-link {{ 'active' if active_tab == 'language' }}" data-pane="language" type="button">
-      🌐 {{ _t('LANGUAGE_PREFERENCES') }}
-    </button>
-  </li>
 </ul>
 
 <style>
@@ -40,7 +35,7 @@
   <!-- ==================== TAB: ACCOUNT DETAILS ==================== -->
   <div class="tab-pane {{ 'active' if active_tab == 'account' }}" id="pane-account">
     <div class="card p-4">
-      <h5 class="mb-3">👤 {{ _t('ACCOUNT_DETAILS') }}</h5>
+      <h5 class="mb-3">👤 Account Details</h5>
       <form method="POST">
         {{ account_form.hidden_tag() }}
         <input type="hidden" name="form_type" value="account">
@@ -54,7 +49,7 @@
         </div>
 
         <hr>
-        <h6 class="mb-3">{{ _t('UPDATE_PASSWORD') }}</h6>
+        <h6 class="mb-3">Update Password</h6>
         <p class="text-muted small">Leave blank to keep your current password.</p>
 
         <div class="mb-3">
@@ -82,7 +77,7 @@
   {% if user.shop %}
   <div class="tab-pane {{ 'active' if active_tab == 'shop' }}" id="pane-shop">
     <div class="card p-4">
-      <h5 class="mb-3">🏪 {{ _t('SHOP_SETTINGS') }}</h5>
+      <h5 class="mb-3">🏪 Shop Settings</h5>
       {% if user.can('owner') %}
       <form method="POST">
         {{ shop_form.hidden_tag() }}
@@ -118,16 +113,16 @@
       {% else %}
       <p class="text-muted">Only the shop owner can edit shop settings.</p>
       <div class="mb-3">
-        <label class="form-label">{{ _t('SHOP_NAME') }}</label>
+        <label class="form-label">Shop Name</label>
         <input type="text" class="form-control" value="{{ user.shop.name }}" disabled>
       </div>
       <div class="row">
         <div class="col-md-6 mb-3">
-          <label class="form-label">{{ _t('STATE') }}</label>
+          <label class="form-label">State</label>
           <input type="text" class="form-control" value="{{ user.shop.state or '—' }}" disabled>
         </div>
         <div class="col-md-6 mb-3">
-          <label class="form-label">{{ _t('DISTRICT') }}</label>
+          <label class="form-label">District</label>
           <input type="text" class="form-control" value="{{ user.shop.district or '—' }}" disabled>
         </div>
       </div>
@@ -135,47 +130,6 @@
     </div>
   </div>
   {% endif %}
-
-  <!-- ==================== TAB: LANGUAGE PREFERENCES ==================== -->
-  <div class="tab-pane {{ 'active' if active_tab == 'language' }}" id="pane-language">
-    <div class="card p-4">
-      <h5 class="mb-3">🌐 {{ _t('LANGUAGE_PREFERENCES') }}</h5>
-      <p class="text-muted mb-4">Choose your preferred language for the ShelfSense AI interface. Your selection affects navigation labels, button text, and section headers.</p>
-
-      <form method="POST">
-        {{ prefs_form.hidden_tag() }}
-        <input type="hidden" name="form_type" value="language">
-
-        <div class="mb-4">
-          {{ prefs_form.preferred_language.label(class="form-label fw-bold") }}
-          <div class="row g-3 mt-1">
-            {% for value, label in language_options %}
-            <div class="col-md-6">
-              <div class="form-check card p-3 {{ 'border-primary bg-light' if prefs_form.preferred_language.data == value else '' }}">
-                <input class="form-check-input" type="radio"
-                       name="preferred_language" value="{{ value }}"
-                       id="lang-{{ value }}"
-                       {{ 'checked' if prefs_form.preferred_language.data == value }}>
-                <label class="form-check-label ms-2" for="lang-{{ value }}">
-                  <strong>{{ label }}</strong>
-                  <br><small class="text-muted">
-                    {% if value == 'en' %}Default language — English interface
-                    {% elif value == 'ms' %}Bahasa Melayu — Bahasa Melayu antaramuka
-                    {% elif value == 'zh' %}中文 — 中文界面
-                    {% elif value == 'ta' %}தமிழ் — தமிழ் இடைமுகம்
-                    {% endif %}
-                  </small>
-                </label>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-        </div>
-
-        {{ prefs_form.submit(class="btn btn-primary") }}
-      </form>
-    </div>
-  </div>
 
 </div>
 

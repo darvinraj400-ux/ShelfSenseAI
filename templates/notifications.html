@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}{{ _t('NOTIFICATIONS_TITLE') }} - ShelfSense AI{% endblock %}
+{% block title %}Notifications - ShelfSense AI{% endblock %}
 {% block content %}
-<h2 class="mb-3">{{ _t('NOTIFICATIONS_TITLE') }}</h2>
+<h2 class="mb-3">Notifications</h2>
 
 {% if notifications %}
   {% for n in notifications %}
@@ -9,7 +9,7 @@
     <div class="card-body">
       <div class="d-flex justify-content-between align-items-start">
         <h6 class="mb-1">{{ n.title }}
-          {% if n.id in new_ids %}<span class="badge bg-primary ms-1">{{ _t('NEW') }}</span>{% endif %}
+          {% if n.id in new_ids %}<span class="badge bg-primary ms-1">New</span>{% endif %}
         </h6>
         <small class="text-muted ms-3">{{ n.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
       </div>
@@ -20,20 +20,20 @@
           <div class="d-flex gap-2">
             <form method="POST" action="{{ url_for('accept_invitation_id', iid=n.invitation.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-success">{{ _t('ACCEPT') }}</button>
+              <button class="btn btn-sm btn-success">Accept</button>
             </form>
             <form method="POST" action="{{ url_for('reject_invitation', iid=n.invitation.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-outline-danger">{{ _t('REJECT') }}</button>
+              <button class="btn btn-sm btn-outline-danger">Reject</button>
             </form>
           </div>
         {% elif n.invitation %}
           {% if n.invitation.status == 'accepted' %}
-            <span class="badge bg-secondary">{{ _t('INVITATION_ACCEPTED') }}</span>
+            <span class="badge bg-secondary">Invitation accepted</span>
           {% elif n.invitation.status == 'rejected' %}
-            <span class="badge bg-secondary">{{ _t('INVITATION_DECLINED') }}</span>
+            <span class="badge bg-secondary">Invitation declined</span>
           {% else %}
-            <span class="badge bg-secondary">{{ _t('INVITATION_EXPIRED') }}</span>
+            <span class="badge bg-secondary">Invitation expired</span>
           {% endif %}
         {% endif %}
       {% endif %}
@@ -42,9 +42,9 @@
   {% endfor %}
 {% else %}
 <div class="text-center py-5 text-muted">
-  <p>{{ _t('NO_NOTIFICATIONS') }}</p>
+  <p>No notifications yet.</p>
   {% if current_user.shop_id is none %}
-  <p class="small">{{ _t('INVITE_NOT_LINKED_HINT') }}</p>
+  <p class="small">Your account is not linked to a shop yet. When an Owner invites you, the invitation will appear here for you to accept.</p>
   {% endif %}
 </div>
 {% endif %}

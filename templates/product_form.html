@@ -20,7 +20,7 @@
           <div class="mb-3">
             {{ form.brand.label(class="form-label") }}
             {{ form.brand(class="form-control", placeholder="e.g. MILO, MAGGI, Generic") }}
-            <div class="form-text">{{ _t('QUANTITY_HINT') }}</div>
+            <div class="form-text">Quantity and unit describe the size of one product/package, not your current stock.</div>
           </div>
 
           <div class="row">
@@ -51,7 +51,7 @@
             <div class="col-md-4 mb-3">
               {{ form.selling_price.label(class="form-label") }}
               {{ form.selling_price(class="form-control" + (" is-invalid" if form.selling_price.errors else ""), placeholder="e.g. 21.00", min="0.01", step="0.01") }}
-              <div class="form-text">{{ _t('SALE_HINT') }}</div>
+              <div class="form-text">Defaults to the product's current price.</div>
               {% for error in form.selling_price.errors %}
                 <div class="invalid-feedback d-block">{{ error }}</div>
               {% endfor %}
@@ -74,8 +74,8 @@
 
           <div class="mb-3">
             <div class="form-text">
-              <strong>{{ _t('QUANTITY_PER_PRODUCT') }}</strong>
-              {{ _t('STOCK_HINT') }}
+              <strong>Quantity per Product</strong>
+              Product Size (e.g. 1 kg) is the size of ONE package — it is not your stock. Current Stock is how many sellable units you have.
             </div>
           </div>
 
@@ -120,20 +120,20 @@
           </div>
 
           {{ form.submit(class="btn btn-primary") }}
-          <a href="{{ url_for('dashboard') }}" class="btn btn-secondary ms-2">{{ _t('CANCEL') }}</a>
+          <a href="{{ url_for('dashboard') }}" class="btn btn-secondary ms-2">Cancel</a>
         </form>
 
         {% if history %}
         <hr class="my-4">
-        <h5 class="mb-3">{{ _t('PRICING_HISTORY') }}</h5>
+        <h5 class="mb-3">Price History</h5>
         <div class="table-responsive">
           <table class="table table-sm table-striped">
             <thead class="table-light">
               <tr>
-                <th>{{ _t('DATE') }}</th>
-                <th>{{ _t('COST_PRICE') }}</th>
-                <th>{{ _t('SELLING_PRICE') }}</th>
-                <th>{{ _t('MARGIN') }}</th>
+                <th>Date</th>
+                <th>Cost Price (RM)</th>
+                <th>Selling Price (RM)</th>
+                <th>Margin %</th>
               </tr>
             </thead>
             <tbody>
@@ -148,7 +148,7 @@
             </tbody>
           </table>
         </div>
-        <small class="text-muted">{{ _t('COST_HISTORY_NOTE') }}</small>
+        <small class="text-muted">Every cost/margin change is logged so margin increases can be traced against cost justification.</small>
         {% endif %}
       </div>
     </div>
