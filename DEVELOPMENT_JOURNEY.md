@@ -518,6 +518,18 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 
 <!-- New entries are appended below this line. Do not modify previous entries. -->
 
+### 2026-08-26 — Remove 4-Language Localization System
+
+- **Removed:** Entire `translations.py` module (1,109 lines of EN/MS/ZH/TA translation dictionaries).
+- **Removed:** `preferred_language` column from `User` model via reverse migration `c8b7e2f1d0a3`.
+- **Removed:** `PreferencesForm` class from `forms.py`.
+- **Removed:** Language preferences tab from Settings page.
+- **Removed:** Language display row from Profile page.
+- **Removed:** Translation context processor (`_t()`, `LANGUAGE_NAMES`, `LANGUAGE_OPTIONS`) from `app.py`.
+- **Updated:** All 20 HTML templates reverted from `_t('KEY')` calls to hardcoded English text (270 replacements across all templates).
+- **Decision:** Language preferences feature was removed to keep the UI simple and avoid translation maintenance overhead for the FYP submission. The application is English-only.
+- **Commit:** `fdbe9f2`
+
 ### 2026-08-26 — Geographic Market Localization & Explainable AI
 
 - **Added:** Shop `state` and `district` columns for geographic market intelligence.
