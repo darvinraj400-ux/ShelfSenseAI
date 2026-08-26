@@ -91,7 +91,8 @@ flask run
 | **3C–D** | Market Intelligence | RapidFuzz 75/25 matching, geographic localization, statistical analysis (PPI) |
 | **3E** | ML Pricing Engine | RandomForestRegressor trained on 5.4M+ real KPDN observations (2022–2026) |
 | **3F** | AI Explainer | Gemini 3.5 Flash Lite with 3-layer fault-tolerant fallback |
-| **4** | Hardening | Dashboard analytics, KPDN price control guardrails, Explainable AI, 84 tests |
+| **4** | Hardening | Dashboard analytics, KPDN price control guardrails, Explainable AI, 84/84 tests passing |
+| **FYP** | Presentation | `DEMO_ROLES_AND_SCRIPT.md` (5-part speaking framework), `TEAM_ROLE_MASTERY_GUIDE.md` (deep comprehension) |
 
 ## ML Training Details
 
@@ -106,3 +107,26 @@ The pricing model is trained on **real government data** from [data.gov.my/price
 *   **Performance:** MAE = RM0.0639 (6.4 sen), R² = 0.9999
 
 The training script (`scripts/train_pricing_model.py`) downloads data from `storage.data.gov.my` automatically. It uses a memory-efficient pipeline that processes each month individually rather than loading all 56 files into memory at once.
+
+## FYP Presentation Documents
+
+| Document | Purpose |
+|----------|---------|
+| `DEMO_ROLES_AND_SCRIPT.md` | Verbatim speaking scripts with WHAT/WHY/HOW/EVIDENCE/RESULT framework for all 3 team members |
+| `TEAM_ROLE_MASTERY_GUIDE.md` | Deep-comprehension knowledge base with domain mastery breakdowns and Q&A prep |
+| `DEMO.md` | Quick demo walkthrough for the live demonstration |
+| `API_REFERENCE.md` | Complete API endpoint documentation |
+| `SCREENSHOT_GUIDE.md` | Step-by-step screenshot guide for the FYP report |
+
+## Testing
+
+```bash
+# Run all 84 tests under pytest
+python -m pytest tests/ -v
+
+# Run standalone tests (also 84 tests)
+python tests/test_market_models.py
+python tests/test_normalization.py
+```
+
+All 84 tests pass with zero failures. Tests cover: normalization (16), market models (7), matching (15), market analysis (13), pricing engine (10), LLM explainer (7), dashboard metrics (7), employee removal (8), and end-to-end integration (1).

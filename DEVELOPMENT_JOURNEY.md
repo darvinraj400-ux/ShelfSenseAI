@@ -579,6 +579,13 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 - **Added:** Hand-written Flask-Migrate migration `a1b2c3d4e5f6`.
 - **Commit:** `997dd8d`
 
+### 2026-08-26 — FYP Presentation Prep & Test Fix
+
+- **DEMO_ROLES_AND_SCRIPT.md:** Comprehensive presentation script with WHAT/WHY/HOW/EVIDENCE/RESULT 5-part communication framework for all 3 team members.
+- **TEAM_ROLE_MASTERY_GUIDE.md:** Deep-comprehension knowledge base with domain mastery breakdowns, 5-part mental model, and Q&A prep per student.
+- **Test fix:** Resolved 7 `test_market_models` failures under pytest caused by missing Flask app context. Removed `conftest.py` autouse fixture (which interfered with other tests' own app context management) and wrapped each test function in `with app.app_context():` instead. Result: **84/84 tests passing**.
+- **Commits:** `566e79b`, `14fa66a`
+
 ### 2026-08-23 — Phase 4 Complete
 
 - **Phase 4A:** Dashboard analytics with metrics cards and Action Required panel.
