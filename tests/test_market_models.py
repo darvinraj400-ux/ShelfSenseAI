@@ -138,134 +138,145 @@ def _cleanup(source, item, obs, shop, product, match):
 
 
 # -------------------------------------------------
-# Tests
+# Tests — each wraps in app.app_context() so both
+# standalone (main()) and pytest (no conftest) work.
 # -------------------------------------------------
+def _run(fn):
+    """Helper: run a test function inside an app context."""
+    with app.app_context():
+        fn()
+
+
 def test_market_source_creation():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        # MarketSource basics
-        assert source.name == TEST_SOURCE_NAME
-        assert source.source_type == 'government'
-        assert source.is_active is True
-        assert source.id is not None
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            assert source.name == TEST_SOURCE_NAME
+            assert source.source_type == 'government'
+            assert source.is_active is True
+            assert source.id is not None
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_market_item_normalized_title_and_package():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        # raw kept untouched, normalized is the clean form
-        assert item.raw_title == '  BERAS CAP JASMINE\u2122 500g '
-        assert item.normalized_title == 'beras cap jasmine 500g'
-        assert item.brand == 'TestBrand'
-        assert item.category == 'BERAS'
-        assert float(item.package_quantity) == 500
-        assert item.package_unit == 'g'
-        # relationship up to the source works
-        assert item.source.name == TEST_SOURCE_NAME
-        assert item.source.source_type == 'government'
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            assert item.raw_title == '  BERAS CAP JASMINE\u2122 500g '
+            assert item.normalized_title == 'beras cap jasmine 500g'
+            assert item.brand == 'TestBrand'
+            assert item.category == 'BERAS'
+            assert float(item.package_quantity) == 500
+            assert item.package_unit == 'g'
+            assert item.source.name == TEST_SOURCE_NAME
+            assert item.source.source_type == 'government'
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_observation_derived_prices():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        # effective_price = promo because is_on_promo
-        assert float(obs.effective_price) == 10.00
-        assert float(obs.regular_price) == 12.00
-        assert obs.is_on_promo is True
-        # normalized unit price auto-computed: 10 RM / 0.5 kg = 20 RM/kg
-        assert float(obs.normalized_unit_price) == 20.0
-        # relationship up to the item works
-        assert obs.market_item.id == item.id
-        assert obs.market_item.raw_title == item.raw_title
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            assert float(obs.effective_price) == 10.00
+            assert float(obs.regular_price) == 12.00
+            assert obs.is_on_promo is True
+            assert float(obs.normalized_unit_price) == 20.0
+            assert obs.market_item.id == item.id
+            assert obs.market_item.raw_title == item.raw_title
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_observation_no_promo_uses_regular_price():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        obs2 = MarketPriceObservation(market_item=item,
-                                      regular_price=12.00,
-                                      promo_price=None,
-                                      is_on_promo=False)
-        db.session.add(obs2)
-        db.session.flush()
-        assert float(obs2.effective_price) == 12.00
-        # 12 RM / 0.5 kg = 24 RM/kg
-        assert float(obs2.normalized_unit_price) == 24.0
-        db.session.delete(obs2)
-        db.session.commit()
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            obs2 = MarketPriceObservation(market_item=item,
+                                          regular_price=12.00,
+                                          promo_price=None,
+                                          is_on_promo=False)
+            db.session.add(obs2)
+            db.session.flush()
+            assert float(obs2.effective_price) == 12.00
+            assert float(obs2.normalized_unit_price) == 24.0
+            db.session.delete(obs2)
+            db.session.commit()
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_product_market_match_link():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        # product side
-        assert match.shop_product_id == product.id
-        assert product.market_matches[0].id == match.id
-        assert match.shop_product.name == TEST_PRODUCT_NAME
-        # market side
-        assert match.market_item_id == item.id
-        assert item.product_matches[0].id == match.id
-        assert match.market_item.raw_title == item.raw_title
-        # match metadata
-        assert float(match.confidence_score) == 0.95
-        assert match.match_type == 'exact'
-        assert match.is_verified is False
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            assert match.shop_product_id == product.id
+            assert product.market_matches[0].id == match.id
+            assert match.shop_product.name == TEST_PRODUCT_NAME
+            assert match.market_item_id == item.id
+            assert item.product_matches[0].id == match.id
+            assert match.market_item.raw_title == item.raw_title
+            assert float(match.confidence_score) == 0.95
+            assert match.match_type == 'exact'
+            assert match.is_verified is False
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_unique_constraint_blocks_duplicate_link():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        dup = ProductMarketMatch(shop_product_id=product.id,
-                                 market_item_id=item.id,
-                                 confidence_score=0.50,
-                                 match_type='fuzzy')
-        db.session.add(dup)
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
         try:
-            db.session.commit()
-            assert False, 'duplicate match should have been rejected'
-        except IntegrityError:
-            db.session.rollback()   # session is usable again after rollback
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+            dup = ProductMarketMatch(shop_product_id=product.id,
+                                     market_item_id=item.id,
+                                     confidence_score=0.50,
+                                     match_type='fuzzy')
+            db.session.add(dup)
+            try:
+                db.session.commit()
+                assert False, 'duplicate match should have been rejected'
+            except IntegrityError:
+                db.session.rollback()
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 def test_manual_match_type_and_verified_flag():
-    before = _counts()
-    source, item, obs, shop, product, match = _create_fixture()
-    try:
-        match.match_type = 'manual'
-        match.is_verified = True
-        match.confidence_score = None
-        db.session.commit()
-        fresh = db.session.get(ProductMarketMatch, match.id)
-        assert fresh.match_type == 'manual'
-        assert fresh.is_verified is True
-        assert fresh.confidence_score is None
-    finally:
-        _cleanup(source, item, obs, shop, product, match)
-    assert _counts() == before, 'DB not restored after test'
+    def _test():
+        before = _counts()
+        source, item, obs, shop, product, match = _create_fixture()
+        try:
+            match.match_type = 'manual'
+            match.is_verified = True
+            match.confidence_score = None
+            db.session.commit()
+            fresh = db.session.get(ProductMarketMatch, match.id)
+            assert fresh.match_type == 'manual'
+            assert fresh.is_verified is True
+            assert fresh.confidence_score is None
+        finally:
+            _cleanup(source, item, obs, shop, product, match)
+        assert _counts() == before, 'DB not restored after test'
+    _run(_test)
 
 
 # -------------------------------------------------
@@ -277,7 +288,6 @@ def _all_tests():
 
 
 def main():
-    # ONE app context for the whole run - helpers must not open their own.
     with app.app_context():
         _purge_leftovers()
         tests = _all_tests()
