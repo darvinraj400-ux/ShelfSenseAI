@@ -295,7 +295,7 @@ def _fetch_localized_observations(market_item_id, shop=None):
 # This function queries the database to collect all relevant
 # market observations and passes them to compute_metrics().
 # -------------------------------------------------
-def get_market_stats(product_id, shop=None):
+def get_market_stats(product_id, shop=None, page=1, per_page=15):
     """Aggregate statistics for one shop product's verified market matches.
 
     This is the main entry point used by the API route and the product
@@ -347,6 +347,10 @@ def get_market_stats(product_id, shop=None):
                .filter_by(shop_product_id=product_id, is_verified=True)
                .all())
 
+    # Extract shop location early — used in Step 5 for tier classification.
+    shop_state = getattr(shop, 'state', None) if shop else None
+    shop_district = getattr(shop, 'district', None) if shop else None
+
     # Step 3: Collect scaled prices from all observations of all matches,
     # using geographic localization when the shop has location data.
     # Also collect raw observation metadata for the transparency table
@@ -387,6 +391,16 @@ def get_market_stats(product_id, shop=None):
             # Collect raw observation for the transparency table.
             # This gives users visibility into the actual KPDN data points
             # that feed the market summary statistics.
+            # Geographic tier: classify each observation by relevance to
+            # the shop's location (District > State > National).
+            obs_district = getattr(obs, 'district', None)
+            obs_state = getattr(obs, 'state', None)
+            if shop_district and obs_district == shop_district:
+                tier = 'district'
+            elif shop_state and obs_state == shop_state:
+                tier = 'state'
+            else:
+                tier = 'national'
             raw_observations.append({
                 'date': obs.observed_at.strftime('%d %b %Y')
                         if obs.observed_at else '—',
@@ -394,8 +408,8 @@ def get_market_stats(product_id, shop=None):
                 'package': _pkg_label(m.market_item),
                 'price': round(float(obs.regular_price), 2),
                 'location': ', '.join(filter(None, [
-                    getattr(obs, 'district', None),
-                    getattr(obs, 'state', None)])) or 'National',
+                    obs_district, obs_state])) or 'National',
+                'tier': tier,
             })
 
         # Record per-match metadata for the UI breakdown card.
@@ -416,8 +430,7 @@ def get_market_stats(product_id, shop=None):
     # Step 8: Build the localization description for the UI.
     # This tells the user whether their market data is local, state-level,
     # or national (and explains why if data fell back to a broader scope).
-    shop_state = getattr(shop, 'state', None) if shop else None
-    shop_district = getattr(shop, 'district', None) if shop else None
+    # shop_state and shop_district were extracted in Step 2.
     if shop_state:
         if shop_district:
             localization = (f'Filtered to {shop_district}, {shop_state}. '
@@ -431,8 +444,38 @@ def get_market_stats(product_id, shop=None):
 
     # Step 9: Enrich metrics with product metadata, match details, and
     # recent observations for the Explainable AI transparency table.
-    # Raw observations are sorted newest-first and capped at 15 to
-    # prevent UI clutter while still showing enough data for trust.
+    # Observations are sorted by geographic tier (district > state > national)
+    # then by date (newest first), and paginated for the UI.
+    _tier_order = {'district': 0, 'state': 1, 'national': 2}
+    raw_observations.sort(
+        key=lambda o: (_tier_order.get(o.get('tier', 'national'), 2),
+                       o.get('date', '')),
+        reverse=False  # district first (0), then state (1), then national (2)
+    )
+    # Within each tier, sort by date descending (newest first).
+    # Re-sort: first by tier (ascending), then by date (descending).
+    raw_observations.sort(
+        key=lambda o: (_tier_order.get(o.get('tier', 'national'), 2),
+                       ''),
+        reverse=False
+    )
+    # Stable sort by date descending within each tier group.
+    from functools import cmp_to_key
+    def _obs_cmp(a, b):
+        ta = _tier_order.get(a.get('tier', 'national'), 2)
+        tb = _tier_order.get(b.get('tier', 'national'), 2)
+        if ta != tb:
+            return ta - tb  # district(0) before state(1) before national(2)
+        # Same tier: newer dates first
+        return (b.get('date', '') > a.get('date', '')) - (b.get('date', '') < a.get('date', ''))
+    raw_observations.sort(key=cmp_to_key(_obs_cmp))
+
+    # Pagination: slice the sorted observations for the current page.
+    total_observations = len(raw_observations)
+    start = (page - 1) * per_page
+    end = start + per_page
+    paginated_observations = raw_observations[start:end]
+
     metrics.update({
         'product_id': product.id,
         'product_name': product.name,
@@ -447,7 +490,11 @@ def get_market_stats(product_id, shop=None):
         'has_package': base_qty is not None,
         'match_count': len(matches),
         'matches': match_meta,
-        'recent_observations': raw_observations[:15],
+        'recent_observations': paginated_observations,
+        'observations_total': total_observations,
+        'observations_page': page,
+        'observations_per_page': per_page,
+        'observations_pages': max(1, (total_observations + per_page - 1) // per_page),
     })
 
     return metrics

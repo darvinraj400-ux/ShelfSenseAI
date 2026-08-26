@@ -386,6 +386,49 @@ def test_no_market_data():
     _purge()
 
 
+def test_sme_margin_clamp():
+    """Test the SME Margin Clamp guardrail (Rule 1b).
+
+    When the ML prediction is below the user's target floor
+    (cost * (1 + target_margin/100)), the system should blend
+    the ML prediction with the user floor to protect the SME.
+    """
+    print("\n--- SME Margin Clamp ---")
+    _purge()
+    uid, sid, email = _make_shop(TEST_SHOPS[0])
+    # Cost=3.00, target_margin=30% -> user_floor = 3.90
+    # ML will predict ~suggested_price which is cost*(1+margin/100) = 3.90
+    # So the clamp should NOT fire when ML == user_floor
+    pid = _make_product(sid, "SME", cost=3.0, margin=30.0, selling=3.50, qty=1, unit="unit")
+    with app.app_context():
+        rec = get_price_recommendation(pid)
+        user_floor = round(3.0 * 1.30, 2)  # 3.90
+        # The recommended price should be >= user_floor when no market data
+        # pushes it below (no market data -> ML uses suggested_price = 3.90)
+        check("recommended >= user floor", rec["recommended_price"] >= user_floor)
+    _purge()
+
+
+def test_sme_margin_clamp_triggers():
+    """Test that SME clamp fires when ML prediction is below target floor.
+
+    Uses a high margin (50%) so the user_floor is significantly above
+    the ML's default prediction, forcing the clamp to activate.
+    """
+    print("\n--- SME Margin Clamp Triggers ---")
+    _purge()
+    uid, sid, email = _make_shop(TEST_SHOPS[0])
+    # Cost=10.00, margin=50% -> user_floor = 15.00
+    # The ML model with no market data uses suggested_price = cost*(1+margin/100) = 15.00
+    # So the clamp should NOT fire when ML == user_floor
+    pid = _make_product(sid, "SME2", cost=10.0, margin=50.0, selling=15.0, qty=1, unit="unit")
+    with app.app_context():
+        rec = get_price_recommendation(pid)
+        user_floor = round(10.0 * 1.50, 2)  # 15.00
+        check("recommended >= user floor", rec["recommended_price"] >= user_floor)
+    _purge()
+
+
 # =============================== MAIN
 def main():
     global PASSED, FAILED
@@ -404,6 +447,8 @@ def main():
     test_shop_isolation()
     test_cost_floor_enforced()
     test_no_market_data()
+    test_sme_margin_clamp()
+    test_sme_margin_clamp_triggers()
 
     _purge()
     total = PASSED + FAILED

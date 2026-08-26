@@ -49,8 +49,13 @@ BASE_URL = "https://storage.data.gov.my/pricecatcher/"
 FILES = {
     "lookup_item": "lookup_item.parquet",
     "lookup_premise": "lookup_premise.parquet",
-    "price": "pricecatcher_2026-08.parquet",
 }
+
+# 90-day data window: load the last 3 months of PriceCatcher data
+# to fix the data sparsity bug (Problem 2). One month often returns
+# < 3 observations per district for niche items, causing the N >= 3
+# statistical safeguard to fail and leaving the market table empty.
+PRICE_MONTHS = ["2026-06", "2026-07", "2026-08"]
 
 def fetch_parquet(name: str) -> pd.DataFrame:
     """Download (or read from cache) a Parquet file and return a DataFrame."""
@@ -59,6 +64,37 @@ def fetch_parquet(name: str) -> pd.DataFrame:
     df = pd.read_parquet(url)
     print(f"  → {len(df):,} rows, {df.shape[1]} columns")
     return df
+
+def fetch_price_months(months: list[str]) -> pd.DataFrame:
+    """Download multiple months of PriceCatcher data and concatenate.
+    
+    Each month's parquet file contains (date, price, item_code, premise_code).
+    We download each month independently (with try/except so one failing
+    month doesn't kill the whole import) and concatenate them into a single
+    DataFrame representing the 90-day data pool.
+    
+    Args:
+        months: List of 'YYYY-MM' strings to download.
+    
+    Returns:
+        A single concatenated DataFrame of all months.
+    """
+    frames = []
+    for month in months:
+        filename = f"pricecatcher_{month}.parquet"
+        url = f"{BASE_URL}{filename}"
+        try:
+            print(f"Downloading price data for {month} from {url} ...")
+            df = pd.read_parquet(url)
+            print(f"  → {month}: {len(df):,} rows")
+            frames.append(df)
+        except Exception as e:
+            print(f"  ⚠️  Failed to download {month}: {e} (skipping)")
+    if not frames:
+        raise RuntimeError("No price data could be downloaded for any month")
+    combined = pd.concat(frames, ignore_index=True)
+    print(f"  → Combined 90-day dataset: {len(combined):,} rows from {len(frames)} months")
+    return combined
 
 # ----------------------------------------------------------------------
 # 4️⃣ Load each table into MySQL
@@ -93,9 +129,13 @@ def load_dataframe(df: pd.DataFrame, table_name: str, *, if_exists: str = "repla
     print(f"  → Table '{table_name}' created/populated.")
 
 # ----------------------------------------------------------------------
-# 5️⃣ Pull the three DataFrames
+# 5️⃣ Pull the DataFrames (lookups + 90-day price history)
 # ----------------------------------------------------------------------
 dfs = {name: fetch_parquet(name) for name in FILES.keys()}
+# Load 3 months of price data to fix the data sparsity bug.
+# Single-month data often has < 3 observations per district,
+# causing the N >= 3 safeguard to fail.
+dfs["price"] = fetch_price_months(PRICE_MONTHS)
 
 # ----------------------------------------------------------------------
 # 5.5️⃣ Normalize key columns, then force an IDENTICAL explicit type everywhere

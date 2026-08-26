@@ -181,10 +181,10 @@
 
   <!-- Recent Competitor Observations (Explainable AI transparency) -->
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">Recent Competitor Pricing (KPDN Open Data) <small class="text-muted">(KPDN Open Data)</small></h5>
+    <h5 class="mb-3">Competitor Pricing (KPDN Open Data) <small class="text-muted">(90-day history)</small></h5>
     <div id="observations-body">
       {% if stats and stats.recent_observations is defined and stats.recent_observations %}
-      <p class="text-muted mb-2">Showing {{ stats.recent_observations|length }} of {{ stats.n }} observations used to calculate the market summary above.</p>
+      <p class="text-muted mb-2">Showing {{ stats.recent_observations|length }} of {{ stats.observations_total }} observations (page {{ stats.observations_page }} of {{ stats.observations_pages }})</p>
       <div class="table-responsive">
         <table class="table table-sm table-striped mb-0">
           <thead class="table-light">
@@ -192,6 +192,7 @@
               <th>Date</th>
               <th>Product</th>
               <th>Package</th>
+              <th>Tier</th>
               <th>Location</th>
               <th class="text-end">Price (RM)</th>
             </tr>
@@ -202,6 +203,15 @@
               <td>{{ obs.date }}</td>
               <td><small>{{ obs.item }}</small></td>
               <td>{{ obs.package }}</td>
+              <td>
+                {% if obs.tier == 'district' %}
+                  <span class="badge bg-success">District</span>
+                {% elif obs.tier == 'state' %}
+                  <span class="badge bg-info">State</span>
+                {% else %}
+                  <span class="badge bg-secondary">National</span>
+                {% endif %}
+              </td>
               <td><small>{{ obs.location }}</small></td>
               <td class="text-end"><strong>RM{{ "%.2f"|format(obs.price) }}</strong></td>
             </tr>
@@ -209,11 +219,19 @@
           </tbody>
         </table>
       </div>
-      {% if stats.n > stats.recent_observations|length %}
-      <small class="text-muted d-block mt-2">… and {{ stats.n - stats.recent_observations|length }} more observations (showing most recent {{ stats.recent_observations|length }}).</small>
+      {% if stats.observations_pages > 1 %}
+      <div class="d-flex justify-content-between align-items-center mt-3">
+        <button class="btn btn-outline-secondary btn-sm" id="obs-prev"
+                {% if stats.observations_page <= 1 %}disabled{% endif %}
+                onclick="loadObservations({{ stats.observations_page - 1 }})">&laquo; Previous</button>
+        <small class="text-muted">Page {{ stats.observations_page }} of {{ stats.observations_pages }}</small>
+        <button class="btn btn-outline-secondary btn-sm" id="obs-next"
+                {% if stats.observations_page >= stats.observations_pages %}disabled{% endif %}
+                onclick="loadObservations({{ stats.observations_page + 1 }})">Next &raquo;</button>
+      </div>
       {% endif %}
       {% else %}
-      <p class="text-muted mb-0">No detailed observations available.. Verify a market match to see the underlying KPDN price data.</p>
+      <p class="text-muted mb-0">No detailed observations available. Verify a market match to see the underlying KPDN price data.</p>
       {% endif %}
     </div>
   </div>
@@ -637,6 +655,48 @@
             if (el) el.innerHTML = '<p class="text-danger">Error loading pricing: ' + esc(e.message) + '</p>';
         });
     });
+
+    // Pagination for competitor observations table.
+    // Fetches page N from the API and re-renders the observations table.
+    window.loadObservations = function(page) {
+        api('/api/product/' + PRODUCT_ID + '/market-stats?page=' + page + '&per_page=15', 'GET').then(function (data) {
+            var body = document.getElementById('observations-body');
+            if (!body || !data.recent_observations || !data.recent_observations.length) {
+                if (body) body.innerHTML = '<p class="text-muted mb-0">No observations on this page.</p>';
+                return;
+            }
+            var tierBadge = function(tier) {
+                if (tier === 'district') return '<span class="badge bg-success">District</span>';
+                if (tier === 'state') return '<span class="badge bg-info">State</span>';
+                return '<span class="badge bg-secondary">National</span>';
+            };
+            var rows = data.recent_observations.map(function(o) {
+                return '<tr>'+
+                    '<td>' + esc(o.date) + '</td>'+
+                    '<td><small>' + esc(o.item) + '</small></td>'+
+                    '<td>' + esc(o.package) + '</td>'+
+                    '<td>' + tierBadge(o.tier) + '</td>'+
+                    '<td><small>' + esc(o.location) + '</small></td>'+
+                    '<td class="text-end"><strong>RM' + o.price.toFixed(2) + '</strong></td>'+
+                '</tr>';
+            }).join('');
+            var pag = '';
+            if (data.observations_pages > 1) {
+                pag = '<div class="d-flex justify-content-between align-items-center mt-3">'+
+                    '<button class="btn btn-outline-secondary btn-sm" '+(data.observations_page<=1?'disabled':'')+' onclick="loadObservations('+(data.observations_page-1)+')">&laquo; Previous</button>'+
+                    '<small class="text-muted">Page '+data.observations_page+' of '+data.observations_pages+'</small>'+
+                    '<button class="btn btn-outline-secondary btn-sm" '+(data.observations_page>=data.observations_pages?'disabled':'')+' onclick="loadObservations('+(data.observations_page+1)+')">Next &raquo;</button>'+
+                '</div>';
+            }
+            body.innerHTML = '<p class="text-muted mb-2">Showing '+data.recent_observations.length+' of '+data.observations_total+' observations (page '+data.observations_page+' of '+data.observations_pages+')</p>'+
+                '<div class="table-responsive"><table class="table table-sm table-striped mb-0"><thead class="table-light"><tr>'+
+                '<th>Date</th><th>Product</th><th>Package</th><th>Tier</th><th>Location</th><th class="text-end">Price (RM)</th>'+
+                '</tr></thead><tbody>'+rows+'</tbody></table></div>' + pag;
+        }).catch(function (e) {
+            var body = document.getElementById('observations-body');
+            if (body) body.innerHTML = '<p class="text-danger">Error loading observations: ' + esc(e.message) + '</p>';
+        });
+    };
 })();
 </script>
 {% endblock %}

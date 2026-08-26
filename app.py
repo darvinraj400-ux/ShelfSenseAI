@@ -1224,11 +1224,14 @@ def _market_json(product):
 @login_required
 def api_product_market_stats(pid):
     """Phase 3D: market statistics for a product's verified matches.
-    All shop roles can read; cross-shop is blocked like every other route."""
+    All shop roles can read; cross-shop is blocked like every other route.
+    Supports pagination: ?page=1&per_page=15 for the competitor table."""
     p = Product.query.get_or_404(pid)
     if p.shop_id != current_user.shop_id:
         abort(403)
-    return jsonify(get_market_stats(p.id, p.shop))
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 15, type=int)
+    return jsonify(get_market_stats(p.id, p.shop, page=page, per_page=per_page))
 
 
 @app.route('/product/<int:pid>')

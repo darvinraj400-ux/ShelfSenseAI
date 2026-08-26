@@ -507,6 +507,28 @@ def get_price_recommendation(product_id, shop=None):
             f"(minimum 5% margin over cost RM{product.cost_price:.2f})"
         )
 
+    # Rule 1b: SME MARGIN CLAMP (Hypermarket Bias Protection)
+    # The ML model is trained on KPDN data dominated by hypermarkets
+    # (Lotus's, Mydin) which operate on 3-5% margins. A small kedai
+    # runcit needs 20-40% margins to survive. If the ML prediction is
+    # below the shop's target floor (cost * (1 + target_margin/100)),
+    # we blend the ML prediction with the user's target price to find
+    # a middle ground that respects both market reality and SME survival.
+    user_floor = round(float(product.cost_price) * (1 + float(product.target_margin) / 100), 2)
+    if ml_prediction < user_floor:
+        # Blend: 60% user floor + 40% ML prediction — leans toward
+        # SME survival while still acknowledging market pressure.
+        blended = round(user_floor * 0.6 + ml_prediction * 0.4, 2)
+        # The blended price must never be below the user floor.
+        ml_prediction = max(blended, user_floor)
+        guardrails_triggered = True
+        guardrails_applied.append("sme_margin")
+        reasoning.append(
+            f"SME margin premium applied: raised from RM{original_prediction:.2f} "
+            f"to RM{ml_prediction:.2f} (target margin {product.target_margin}% "
+            f"to protect small shop viability against hypermarket pricing)"
+        )
+
     # Rule 2: MARKET SANITY
     # Clamps the price within reasonable market bounds to prevent
     # extreme recommendations that would be unsellable.
