@@ -335,18 +335,19 @@ Where:
 | 12 | price_to_market_ratio | cost_price / market_median |
 | 13 | quantity | Product package quantity |
 
-### 4.4 Deterministic Guardrails (4 Rules in Strict Order)
+### 4.4 Deterministic Guardrails (5 Rules in Strict Order)
 
-The ML prediction is intercepted by four sequential safety rules:
+The ML prediction is intercepted by five sequential safety rules:
 
 | Rule | Name | Logic | Behavior |
 |---|---|---|---|
 | **Rule 0** | Regulatory Cap | If `is_price_controlled` and price > `government_ceiling_price` → cap at ceiling | **Hard cap** — overrides ML output |
 | **Rule 1** | Cost Floor | If price < `cost_price × 1.05` → raise to floor | **Hard cap** — prevents selling at loss |
+| **Rule 1b** | SME Margin Clamp | If ML prediction < user's target floor → blend 60% floor + 40% ML | **Soft clamp** — prevents hypermarket bias from bankrupting SMEs |
 | **Rule 2** | Market Sanity | If price < 70% of market_min or > 150% of market_max → clamp | **Hard cap** — prevents extreme outliers |
-| **Rule 3** | PCAPA Check | If margin > baseline AND cost hasn't risen → warning | **Soft warning** — informational, not forced |
+| **Rule 3** | PCAPA Check | If margin > baseline + 1.5% tolerance AND cost hasn't risen → warning | **Soft warning** — informational, not forced |
 
-**Key guarantee:** The recommended price is ALWAYS ≥ cost × 1.05 (Rule 1) and NEVER exceeds the KPDN ceiling for controlled goods (Rule 0).
+**Key guarantee:** The recommended price is ALWAYS ≥ cost × 1.05 (Rule 1), NEVER exceeds the KPDN ceiling for controlled goods (Rule 0), and respects the SME business model (Rule 1b). The 1.5% PCAPA tolerance prevents false warnings from rounding artifacts.
 
 ### 4.5 Gemini LLM Integration (`services/llm_explainer.py`)
 
@@ -358,7 +359,7 @@ The ML prediction is intercepted by four sequential safety rules:
 | **Layer 2** | API failure | try/except catches network errors, rate limits, missing API key |
 | **Layer 3** | Fallback | Deterministic string template using same data, no external calls |
 
-**Prompt structure:** Injects product name, cost, market median, recommended price, guardrails triggered, PCAPA status, and regulatory context. LLM is instructed to explain in 2–3 concise sentences under 100 words.
+**Prompt structure:** Injects product name, cost, market median, recommended price, guardrails triggered, PCAPA status, and regulatory context. The system prompt includes explicit legal guardrails: if a PCAPA warning is present, the LLM MUST NOT advise raising the price (this prevents dangerous business advice). LLM is instructed to explain in 2–3 concise sentences under 100 words.
 
 **Critical guarantee:** The function NEVER raises exceptions. A broken API key returns a sensible fallback string rather than crashing the dashboard.
 
@@ -517,6 +518,15 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 ## 7. Recent Updates
 
 <!-- New entries are appended below this line. Do not modify previous entries. -->
+
+### 2026-08-27 — Unit Normalization Fix, PCAPA Tolerance & LLM Legal Guardrails
+
+- **Fixed: Unit Normalization Scaling Bug** — Products without a `unit` field caused the market median to pass through unscaled (per-kg instead of per-package), causing the ML to hallucinate absurd prices (e.g., RM 28 for toothpaste when the real per-tube price is RM 13.82). Added `_infer_base_qty_from_market()` helper that uses the matched `MarketItem`'s package info as a fallback reference. Three-layer fallback chain: product unit → market item package → default 1.0.
+- **Fixed: PCAPA Rounding Collision** — Added `PCAPA_EPSILON = 1.5` tolerance threshold to `_check_pcapa()`. The SME Margin Clamp's rounding artifacts (e.g., 25.3% vs 25.0%) no longer trigger false legal warnings. Only genuine margin spikes (> 1.5% above baseline) fire the warning.
+- **Fixed: LLM Hallucination** — Updated the Gemini prompt template with explicit legal guardrails: "If a PCAPA warning is present, you MUST NOT advise the user to raise the price closer to the market median." Updated `_fallback()` deterministic template to include "Do not increase the price further" when PCAPA warnings are active. Prevents the LLM from giving dangerous business advice that would worsen PCAPA violations.
+- **Files changed:** `services/market_analysis.py`, `services/pricing_engine.py`, `services/llm_explainer.py`, `tests/test_market_analysis.py`
+- **Tests:** 86/86 passing — zero regressions.
+
 
 ### 2026-08-26 — Remove 4-Language Localization System
 

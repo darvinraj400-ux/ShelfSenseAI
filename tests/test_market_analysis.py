@@ -238,11 +238,16 @@ def test_stats_product_without_package_uses_base_unit():
         s = get_market_stats(product_b_id)
         assert s['has_package'] is False
         assert s['package_label'] is None
-        assert 'per base unit' in s['scaling_note']
+        assert 'matched package size' in s['scaling_note']
         raw = _obs_prices(item_id)
         assert s['n'] == len(raw)
-        # unscaled: market median is the raw RM/kg median
-        assert s['median'] == round(median(raw), 2)
+        # scaled via MarketItem fallback: median is normalized_unit_price * item base_qty
+        from utils.normalization import normalize_package_size
+        from app import MarketItem
+        mi = MarketItem.query.get(item_id)
+        item_qty, _ = normalize_package_size(float(mi.package_quantity), mi.package_unit)
+        expected = [float(p) * item_qty for p in raw if float(p) > 0]
+        assert s['median'] == round(median(expected), 2)
         _purge()
 
 

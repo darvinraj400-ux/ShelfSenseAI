@@ -59,7 +59,12 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are a pricing assistant for a small retail shop in Malaysia.
 Explain the recommended price for a product in 2-3 concise sentences.
 Be practical and direct — the shop owner needs a clear, actionable insight.
-Mention the market context if available. Keep it under 100 words."""
+Mention the market context if available. Keep it under 100 words.
+
+CRITICAL LEGAL RULES:
+- If a PCAPA warning is present, you MUST NOT advise the user to raise the price closer to the market median or any higher price. PCAPA law strictly forbids arbitrary margin increases without a cost increase. Giving such advice would constitute illegal business guidance.
+- If the regulatory cap (KPDN Barangan Kawalan) was applied, emphasize that the cap is a strict legal compliance measure and must not be overridden.
+- Never suggest pricing strategies that would increase margins beyond the baseline without a documented cost increase."""
 
 USER_PROMPT_TEMPLATE = """Product: {product_name}
 Cost price: RM{cost_price:.2f}
@@ -72,8 +77,10 @@ Market range: {market_range}
 Confidence: {confidence}
 Guardrails applied: {guardrails}
 PCAPA warning: {pcapa_warning}
+{pcapa_details}
 {regulatory_context}
-Explain why this price is recommended. Be concise (2-3 sentences)."""
+Explain why this price is recommended. Be concise (2-3 sentences).
+If PCAPA warning is Yes, you MUST NOT suggest raising the price. The recommended price is the legal maximum given current constraints."""
 
 
 # -------------------------------------------------
@@ -124,6 +131,11 @@ def generate_pricing_explanation(product, market_stats, recommendation):
     guardrails = ", ".join(recommendation.get("guardrails_applied", [])) or "None"
     pcapa_warn = "Yes" if recommendation.get("warnings") else "No"
 
+    # Include the full PCAPA warning text so the LLM understands the legal context.
+    pcapa_details = ""
+    if recommendation.get("warnings"):
+        pcapa_details = f"PCAPA details: {recommendation['warnings'][0]}"
+
     # Build the regulatory context for KPDN Barangan Kawalan products.
     # This is injected into the prompt ONLY when the regulatory cap was applied,
     # ensuring the LLM emphasizes the legal compliance aspect.
@@ -149,6 +161,7 @@ def generate_pricing_explanation(product, market_stats, recommendation):
         confidence=recommendation.get("confidence", "unknown"),
         guardrails=guardrails,
         pcapa_warning=pcapa_warn,
+        pcapa_details=pcapa_details,
         regulatory_context=regulatory_context,
     )
 
@@ -258,5 +271,13 @@ def _fallback(product, market_stats, recommendation):
     # Append any compliance warnings (e.g. PCAPA).
     if recommendation.get("warnings"):
         parts.append("\u26a0 " + recommendation["warnings"][0])
+        # Legal constraint: when PCAPA warning is active, explicitly state
+        # that the price must not be increased further (prevents LLM advice
+        # to raise prices toward market median, which would worsen the violation).
+        parts.append(
+            "Do not increase the price further — "
+            "the PCAPA law strictly forbids margin increases without "
+            "a documented cost increase."
+        )
 
     return " ".join(parts)

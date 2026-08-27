@@ -359,12 +359,11 @@ The AI explanation system (`services/llm_explainer.py`) uses Gemini 3.5 Flash Li
 ### ❓ WHY?
 During a live demo or production use, the Gemini API might be down, rate-limited, or the API key might be invalid. The app must never crash. The user must always see a meaningful explanation.
 
-### ⚙️ HOW?
-**Layer 1** — Live Gemini API call: Construct a detailed prompt with product name, cost, market median, recommended price, guardrails, and PCAPA status. Send to `genai.Client(api_key=GEMINI_API_KEY)`.
+### ⚙️ HOW?**Layer 1** — Live Gemini API call: Construct a detailed prompt with product name, cost, market median, recommended price, guardrails, and PCAPA status. The prompt includes explicit legal guardrails — the LLM is instructed NEVER to advise raising prices when a PCAPA warning is present, as this would worsen a legal violation. Send to `genai.Client(api_key=GEMINI_API_KEY)`. 
 
 **Layer 2** — Exception catch: `except Exception as e: return _fallback(...)`. Any failure (404, 429, timeout, missing key) triggers the fallback.
 
-**Layer 3** — Deterministic string template: Generates a clean explanation using only available data: "The recommended price of RMX.XX is based on a target margin of Y% over a cost of RMC.CC, compared to the market median of RMM.MM."
+**Layer 3** — Deterministic string template: Generates a clean explanation using only available data. When PCAPA warnings are active, the fallback explicitly states that further price increases are legally prohibited under PCAPA 2011.
 
 The function **never returns None or raises** — it always returns a string.
 
@@ -400,13 +399,13 @@ The `_call_gemini()` function (line 172) checks `if not api_key: raise ValueErro
 
 ---
 
-## Domain Mastery 1: Four Deterministic Guardrails (The Pricing Brain)
+## Domain Mastery 1: Five Deterministic Guardrails (The Pricing Brain)
 
 ### 🧠 WHAT?
-The ML pricing engine has four hard-coded guardrails that intercept and override the ML prediction before it reaches the user. These are applied in strict priority order.
+The ML pricing engine has five hard-coded guardrails that intercept and override the ML prediction before it reaches the user. These are applied in strict priority order.
 
 ### ❓ WHY?
-ML models can produce extreme predictions — recommending RM 0.01 for rice, or RM 500 for cooking oil. A shop owner who blindly follows such a recommendation would go bankrupt or lose all customers. Deterministic guardrails are the safety net that ensures every recommendation is legally compliant and commercially viable.
+ML models can produce extreme predictions — recommending RM 0.01 for rice, or RM 500 for cooking oil. The ML model is trained on hypermarket data (Lotus's, Mydin) which operates on razor-thin margins. Without guardrails, it would recommend hypermarket prices to a small kedai runcit, which cannot survive on 3% margins. Deterministic guardrails ensure every recommendation is legally compliant, commercially viable, and respects the local SME business model.
 
 ### ⚙️ HOW?
 In `services/pricing_engine.py` (lines 470-540), the guardrails fire in order:
@@ -428,6 +427,13 @@ if recommended_price < floor:
 ```
 Never sell below cost + 5%. This covers electricity, rent, wages.
 
+**Rule 1b — SME Margin Clamp (Anti-Hypermarket Bias):**
+```python
+if ml_prediction < user_target_floor:
+    blended = 0.60 * user_target_floor + 0.40 * ml_prediction
+```
+When the ML predicts a price below the shop's target margin, we blend to protect the SME business model. Prevents hypermarket-dominated data from bankrupting small kedai runcit.
+
 **Rule 2 — Market Sanity:**
 ```python
 low = max(market_min * 0.70, 0.01)   # Don't go below 70% of market min
@@ -435,20 +441,21 @@ high = market_max * 1.50              # Don't go above 150% of market max
 ```
 Prevents unsellable prices from ML artifacts.
 
-**Rule 3 — PCAPA Compliance:**
+**Rule 3 — PCAPA Compliance (with 1.5% tolerance):**
 ```python
-if implied_margin > baseline_margin:
+PCAPA_EPSILON = 1.5  # prevents false warnings from rounding artifacts
+if implied_margin > baseline_margin + PCAPA_EPSILON:
     if product.cost_price <= baseline_cost:
-        # WARNING: margin up, cost flat = potential profiteering
+        # WARNING: genuine margin increase, not rounding artifact
 ```
-Warning only, not a hard cap — the owner makes the final decision.
+Warning only, not a hard cap — the owner makes the final decision. The 1.5% tolerance prevents the SME Margin Clamp's rounding from triggering false legal warnings.
 
 ### 🖥️ EVIDENCE
-- **Show** `services/pricing_engine.py` lines 470-540: all four guardrails in sequence
+- **Show** `services/pricing_engine.py` lines 470-540: all five guardrails in sequence
 - **Live test** (S3 will demonstrate each guardrail in the browser — see live test cases below)
 
 ### ✅ RESULT
-This proves the system provides a **100% complete solution** to the pricing problem (Aspect 3) — not just ML prediction, but legally and commercially safe pricing with explainable guardrails.
+This proves the system provides a **100% complete solution** to the pricing problem (Aspect 3) — not just ML prediction, but legally and commercially safe pricing with explainable guardrails that protect both regulatory compliance and the local SME business model.
 
 ---
 

@@ -241,7 +241,7 @@
 > "During a live demo or production use, the Gemini API might be down, rate-limited, or the API key might be invalid. The app must never crash. The user must always see a meaningful explanation."
 
 ### ⚙️ HOW?
-> "Layer 1 is the live Gemini API call with a detailed prompt. Layer 2 catches any exception — 404, 429, timeout, missing key. Layer 3 is a deterministic string template that generates an explanation from available data: product name, cost, market median, and triggered guardrails. The function **never returns None or raises** — it always returns a string."
+> "Layer 1 is the live Gemini API call with a detailed prompt that includes legal guardrails — the LLM is explicitly instructed NEVER to advise raising prices when a PCAPA warning is present. Layer 2 catches any exception — 404, 429, timeout, missing key. Layer 3 is a deterministic string template that generates an explanation from available data: product name, cost, market median, and triggered guardrails. When PCAPA warnings are active, the fallback explicitly states that further price increases are legally prohibited. The function **never returns None or raises** — it always returns a string."
 
 **[CODE PIVOT — `services/llm_explainer.py` lines 80-165: the three-layer chain with the `except Exception` block]**
 
@@ -276,26 +276,26 @@
 
 ---
 
-## S3.1 — Four Deterministic Guardrails
+## S3.1 — Five Deterministic Guardrails
 
 **[Screen: Show `services/pricing_engine.py` guardrails section]**
 
 ### 🧠 WHAT?
-> "The ML pricing engine has four hard-coded guardrails that intercept and override the ML prediction in strict priority order: Regulatory Cap (KPDN), Cost Floor, Market Sanity, and PCAPA Compliance."
+> "The ML pricing engine has five hard-coded guardrails that intercept and override the ML prediction in strict priority order: Regulatory Cap (KPDN), Cost Floor, SME Margin Clamp, Market Sanity, and PCAPA Compliance."
 
 ### ❓ WHY?
-> "ML models can produce extreme predictions — recommending RM 0.01 for rice or RM 500 for cooking oil. A shop owner who blindly follows such a recommendation would go bankrupt or lose all customers. Deterministic guardrails are the safety net that ensures every recommendation is legally compliant and commercially viable."
+> "ML models can produce extreme predictions — recommending RM 0.01 for rice or RM 500 for cooking oil. A shop owner who blindly follows such a recommendation would go bankrupt or lose all customers. The ML model is trained on hypermarket data (Lotus's, Mydin) which operates on razor-thin margins. Without guardrails, it would recommend hypermarket prices to a small kedai runcit, which cannot survive on 3% margins. Deterministic guardrails ensure every recommendation is legally compliant, commercially viable, and respects the local SME business model."
 
 ### ⚙️ HOW?
-> "Rule 0 fires first: if a product is KPDN price-controlled and the ML prediction exceeds the ceiling, it's hard-capped. Rule 1 ensures selling price never goes below cost × 1.05 — a 5% minimum margin covering electricity, rent, wages. Rule 2 clamps within 70%-150% of market range to prevent unsellable extremes. Rule 3 checks PCAPA compliance — if margin exceeds the baseline without a cost increase, it flags a warning."
+> "Rule 0 fires first: if a product is KPDN price-controlled and the ML prediction exceeds the ceiling, it's hard-capped. Rule 1 ensures selling price never goes below cost × 1.05 — a 5% minimum margin. Rule 1b is the SME Margin Clamp — if the ML prediction falls below the user's target floor (cost × target_margin), we blend 60% of the user's floor with 40% of the ML prediction to prevent hypermarket bias from bankrupting small shops. Rule 2 clamps within 70%-150% of market range. Rule 3 checks PCAPA compliance with a 1.5% tolerance threshold to prevent false warnings from rounding artifacts."
 
-**[CODE PIVOT — `services/pricing_engine.py` lines 470-540: all four guardrails in sequence]**
+**[CODE PIVOT — `services/pricing_engine.py` lines 470-540: all five guardrails in sequence]**
 
 ### 🖥️ EVIDENCE?
-> "We can see the guardrails in the code: Rule 0 checks `if product.is_price_controlled and product.government_ceiling_price:`, Rule 1 calls `_apply_cost_floor()` with `MIN_MARGIN_FLOOR = 0.05`, Rule 2 calls `_apply_market_sanity()`, and Rule 3 calls `_check_pcapa()`. Now let me demonstrate each one live."
+> "We can see the guardrails in the code: Rule 0 checks `if product.is_price_controlled and product.government_ceiling_price:`, Rule 1 calls `_apply_cost_floor()` with `MIN_MARGIN_FLOOR = 0.05`, Rule 1b checks if the ML prediction is below the user's target floor and blends them, Rule 2 calls `_apply_market_sanity()`, and Rule 3 calls `_check_pcapa()` with a 1.5% epsilon tolerance. Now let me demonstrate each one live."
 
 ### ✅ RESULT?
-> "This proves the system provides a **100% complete solution** to the pricing problem (Aspect 3) — not just ML prediction, but legally and commercially safe pricing with explainable guardrails."
+> "This proves the system provides a **100% complete solution** to the pricing problem (Aspect 3) — not just ML prediction, but legally and commercially safe pricing with explainable guardrails that protect both regulatory compliance and the local SME business model."
 
 ---
 

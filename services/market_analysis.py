@@ -94,6 +94,50 @@ def _product_base_quantity(product):
     return q
 
 
+def _infer_base_qty_from_market(matches):
+    """Infer a fallback base quantity from matched MarketItem packages.
+
+    When a shop product has no unit defined (user left it blank),
+    the system cannot compute base_qty and falls back to showing
+    per-base-unit prices. This causes the ML model to hallucinate
+    absurd prices (e.g. RM 28 for toothpaste) because it compares
+    the product's cost_price against a per-kg market price that is
+    4x higher than the per-package price.
+
+    This function looks at the first matched MarketItem's package
+    info and returns its normalized base quantity as a reference.
+    This ensures the market median is scaled to the SAME package
+    size that the market data was recorded at.
+
+    Example: Product 'UBAT GIGI COLGATE' has no unit set.
+      MarketItem is 0.25 kg (1 tube).
+      normalized_unit_price = RM 55.28/kg.
+      base_qty = 0.25 → scaled price = RM 55.28 * 0.25 = RM 13.82.
+      ML now correctly compares RM 12 cost vs RM 13.82 market.
+
+    Args:
+        matches: List of ProductMarketMatch ORM objects.
+
+    Returns:
+        A float base quantity from the first match's MarketItem,
+        or None if no matches have valid package data.
+    """
+    if not matches:
+        return None
+
+    # Import here to avoid circular imports at module level.
+    from app import MarketItem
+
+    for m in matches:
+        mi = MarketItem.query.get(m.market_item_id)
+        if mi is not None and mi.package_quantity and float(mi.package_quantity) > 0:
+            q, _ = normalize_package_size(
+                float(mi.package_quantity), mi.package_unit)
+            if q > 0:
+                return q
+    return None
+
+
 # -------------------------------------------------
 # PURE METRIC COMPUTATION
 #
@@ -380,13 +424,21 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
             if up is None or float(up) <= 0:
                 continue
 
-            if base_qty is not None:
-                # SCALE UP: Convert RM per base unit to RM per product package.
-                # Example: RM 2.60/kg * 10 kg = RM 26.00 per 10 kg bag.
-                scaled.append(float(up) * base_qty)
-            else:
-                # NO PACKAGE: Compare per base unit (no scaling possible).
-                scaled.append(float(up))
+            # Determine the effective base quantity for scaling.
+            # Priority: product's own unit > inferred from market item > 1.0.
+            effective_qty = base_qty
+            if effective_qty is None:
+                # Product has no unit — try to infer from the matched MarketItem.
+                # This prevents the ML model from comparing per-kg prices
+                # against per-package costs (the 'RM 56 toothpaste' bug).
+                effective_qty = _infer_base_qty_from_market([m])
+            if effective_qty is None:
+                # Fallback: assume product is 1 base unit (1 kg / 1 L).
+                effective_qty = 1.0
+
+            # SCALE UP: Convert RM per base unit to RM per product package.
+            # Example: RM 55.28/kg * 0.25 kg = RM 13.82 per tube.
+            scaled.append(float(up) * effective_qty)
 
             # Collect raw observation for the transparency table.
             # This gives users visibility into the actual KPDN data points
@@ -482,9 +534,10 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
         'package_label': product.size_label
                          if base_qty is not None else None,
         'scaling_note': ('Market prices scaled to your package size '
-                         f'({product.size_label}).' if base_qty is not None
-                         else 'Product has no package size - market prices '
-                              'shown per base unit (kg/l/unit).'),
+                         f'({product.size_label}).')
+                         if base_qty is not None
+                         else 'Market prices scaled to matched package size'
+                              ' (set product unit for precise scaling).',
         'localization': localization,
         'shop_price': _r2(shop_price) if shop_price is not None else None,
         'has_package': base_qty is not None,

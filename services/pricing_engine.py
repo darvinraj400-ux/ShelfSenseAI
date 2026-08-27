@@ -284,8 +284,14 @@ def _check_pcapa(product, recommended_price):
     # Compute the margin that the recommended price implies.
     implied_margin = round((recommended_price / product.cost_price - 1) * 100, 2)
 
-    # Check if the implied margin exceeds the baseline.
-    if implied_margin > product.baseline_margin:
+    # TOLERANCE THRESHOLD: A 1.5% absolute tolerance prevents the PCAPA
+    # guardrail from self-sabotaging after the SME Margin Clamp raises
+    # a price. Without this, rounding artifacts (e.g. 25.3% vs 25.0%)
+    # would trigger false legal warnings that confuse shop owners.
+    PCAPA_EPSILON = 1.5  # percentage points
+
+    # Check if the implied margin exceeds the baseline (with tolerance).
+    if implied_margin > product.baseline_margin + PCAPA_EPSILON:
         # Look up the FIRST PriceHistory entry — this records the cost at
         # product creation time (when baseline_margin was locked).
         baseline_history = (PriceHistory.query
