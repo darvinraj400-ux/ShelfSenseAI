@@ -36,6 +36,9 @@ ARCHITECTURAL DECISIONS
 ============================================================
 """
 from statistics import median as _median, mean as _mean
+from datetime import datetime, timedelta
+
+from sqlalchemy import func, text                               # noqa: E402
 
 from app import (db, Product, ProductMarketMatch,            # noqa: E402
                  MarketPriceObservation, MarketItem, MarketSource)
@@ -223,6 +226,74 @@ def compute_metrics(scaled_prices, shop_price=None):
     }
 
 
+# -------------------------------------------------
+# MARKET POSITION (Phase 6D)
+#
+# A retailer's price is classified relative to the market median
+# using a configurable tolerance band. Prices within the band are
+# 'Near Market'; anything outside is 'Above Market' / 'Below Market'.
+# The threshold is a named constant (documented + tested), NOT a
+# magic number buried in display logic.
+# -------------------------------------------------
+
+# Tolerance band around the market median, as a fraction (0.05 = 5%).
+# Rationale: everyday-goods prices commonly fluctuate a few percent
+# between stores; within 5% of the median the shop is competitive and
+# no pricing action is suggested. Documented in DEVELOPMENT_JOURNEY.md
+# and asserted by tests/test_market_intelligence.py.
+NEAR_MARKET_TOLERANCE = 0.05
+
+
+def market_position(shop_price, market_median,
+                    tolerance=NEAR_MARKET_TOLERANCE):
+    """Classify the retailer's price relative to the market median.
+
+    Pure function (no DB access) so it is unit-testable in isolation.
+
+    Categories:
+      'Below Market' — more than `tolerance` UNDER the median.
+      'Near Market'  — within +/- `tolerance` of the median.
+      'Above Market' — more than `tolerance` OVER the median.
+
+    Args:
+        shop_price: The retailer's current selling price (RM), or None.
+        market_median: The market median price (RM), or None.
+        tolerance: Fractional band around the median (default 5%,
+                   see NEAR_MARKET_TOLERANCE).
+
+    Returns:
+        A dict with:
+          position: 'Below Market' | 'Near Market' | 'Above Market' | None
+          difference: shop_price - median (RM, rounded 2dp) or None
+          difference_percent: signed % vs median (rounded 2dp) or None
+        Returns position=None (with None differences) when either input
+        is missing or the median is not positive — the UI must show an
+        empty state rather than a fake zero.
+    """
+    if (shop_price is None or market_median is None
+            or float(market_median) <= 0 or float(shop_price) <= 0):
+        return {'position': None, 'difference': None,
+                'difference_percent': None}
+
+    shop = float(shop_price)
+    med = float(market_median)
+    diff = shop - med
+    pct = diff / med * 100
+
+    if abs(pct) <= tolerance * 100:
+        position = 'Near Market'
+    elif pct < 0:
+        position = 'Below Market'
+    else:
+        position = 'Above Market'
+
+    return {
+        'position': position,
+        'difference': _r2(diff),
+        'difference_percent': _r2(pct),
+    }
+
+
 def _pkg_label(market_item):
     """Generate a human-readable package label for a market item.
 
@@ -339,6 +410,198 @@ def _fetch_localized_observations(market_item_id, shop=None):
 # This function queries the database to collect all relevant
 # market observations and passes them to compute_metrics().
 # -------------------------------------------------
+# -------------------------------------------------
+# HISTORICAL MARKET TREND (Phase 6F)
+#
+# Per-date market statistics computed SERVER-SIDE. MariaDB 10.4
+# supports PERCENTILE_CONT as a window function, so the median for
+# every observation date is calculated inside MySQL — we never pull
+# millions of observation rows into Python just to compute a median.
+# One indexed range scan per matched market item returns at most one
+# row per day (bounded by the lookback window).
+# -------------------------------------------------
+
+# Default lookback window for the trend chart (days).
+TREND_LOOKBACK_DAYS = 90
+
+
+def get_market_trend(market_item_ids, shop=None,
+                     lookback_days=TREND_LOOKBACK_DAYS):
+    """Per-date market statistics for one or more market items.
+
+    All aggregation (COUNT, MIN, MAX, AVG, median via PERCENTILE_CONT)
+    happens in the database; Python only formats the returned rows.
+
+    Args:
+        market_item_ids: List of MarketItem ids (the product's verified
+            matches). An empty list returns [] immediately.
+        shop: Optional Shop ORM object. When it has state/district the
+            trend uses the SAME 3-tier geographic fallback as the
+            snapshot stats (district -> state -> national), so the
+            chart and the summary cards always describe the same market.
+        lookback_days: Only observations within the last N days are
+            included (indexed date range scan; no full-table work).
+
+    Returns:
+        A dict:
+          tier: 'district' | 'state' | 'national' | None
+          tier_label: human-readable scope (e.g. 'Segamat, Johor')
+          points: list of {date, median, min, max, mean, observations,
+                           premises} — one row per date that actually has
+           observations (missing dates are NOT invented), oldest first.
+    """
+    if not market_item_ids:
+        return {'tier': None, 'tier_label': None, 'points': []}
+
+    # Dedupe: verified matches can repeat the same market item; a raw
+    # IN (...) list of thousands of ids would bloat the query.
+    ids = sorted({int(i) for i in market_item_ids})
+
+    shop_state = getattr(shop, 'state', None)
+    shop_district = getattr(shop, 'district', None)
+
+    # Resolve the geographic tier with the same fallback chain as the
+    # snapshot: district -> state -> national (_MIN_OBSERVATIONS applies).
+    def _count(state, district):
+        q = (db.session.query(func.count(MarketPriceObservation.id))
+             .join(MarketItem).join(MarketSource)
+             .filter(MarketPriceObservation.market_item_id.in_(ids),
+                     MarketSource.is_active.is_(True)))
+        if state:
+            q = q.filter(MarketPriceObservation.state == state)
+        if district:
+            q = q.filter(MarketPriceObservation.district == district)
+        return q.scalar() or 0
+
+    tier, tier_label = 'national', 'National'
+    filters = []
+    if shop_state and shop_district:
+        n = _count(shop_state, shop_district)
+        if n >= _MIN_OBSERVATIONS:
+            tier, tier_label = 'district', f'{shop_district}, {shop_state}'
+            filters = [shop_state, shop_district]
+    if not filters and shop_state:
+        n = _count(shop_state, None)
+        if n >= _MIN_OBSERVATIONS:
+            tier, tier_label = 'state', shop_state
+            filters = [shop_state]
+    if not filters and shop_state:
+        # State/district had insufficient data -> national, labelled
+        # honestly so the UI never implies local data is being shown.
+        tier_label = 'National (no sufficient local data)'
+
+    # Indexed range scan: item ids + optional geo filters + date window.
+    # MariaDB 10.4 supports PERCENTILE_CONT only as a WINDOW function, so
+    # the median is computed in an inner query (window partitioned by
+    # date over the raw rows) and the outer GROUP BY takes MAX(med).
+    # Everything else (COUNT/MIN/MAX/AVG) is plain server-side grouping.
+    placeholders = ','.join(f':i{k}' for k in range(len(ids)))
+    params = {f'i{k}': v for k, v in enumerate(ids)}
+    params['since'] = datetime.utcnow().date() - timedelta(days=lookback_days)
+    geo_sql = ''
+    if len(filters) == 2:
+        geo_sql = ' AND o.state = :st AND o.district = :di'
+        params['st'], params['di'] = filters
+    elif len(filters) == 1:
+        geo_sql = ' AND o.state = :st'
+        params['st'] = filters[0]
+
+    sql = text(f'''
+        SELECT observed_at AS d,
+               COUNT(*) AS n,
+               COUNT(DISTINCT premise_code) AS premises,
+               MIN(regular_price) AS lo,
+               MAX(regular_price) AS hi,
+               AVG(regular_price) AS avg,
+               MAX(med) AS median
+        FROM (
+            SELECT o.observed_at, o.regular_price, o.premise_code,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP
+                     (ORDER BY o.regular_price)
+                     OVER (PARTITION BY o.observed_at) AS med
+            FROM market_price_observation o
+            JOIN market_item mi ON mi.id = o.market_item_id
+            JOIN market_source ms ON ms.id = mi.source_id
+            WHERE o.market_item_id IN ({placeholders})
+              AND ms.is_active = 1
+              AND o.observed_at >= :since
+              {geo_sql}
+        ) raw
+        GROUP BY observed_at
+        ORDER BY observed_at ASC
+    ''')
+    rows = db.session.execute(sql, params).fetchall()
+
+    points = [{
+        'date': r.d.date().isoformat() if hasattr(r.d, 'date') else str(r.d),
+        'median': _r2(float(r.median)) if r.median is not None else None,
+        'min': _r2(float(r.lo)) if r.lo is not None else None,
+        'max': _r2(float(r.hi)) if r.hi is not None else None,
+        'mean': _r2(float(r.avg)) if r.avg is not None else None,
+        'observations': int(r.n),
+        'premises': int(r.premises),
+    } for r in rows]
+
+    return {'tier': tier, 'tier_label': tier_label, 'points': points}
+
+
+def _competitor_snapshot(market_item_ids, latest_date, shop=None):
+    """Latest-snapshot store-level prices for the competitor table.
+
+    Returns one row per (market item, premise) on the LATEST observation
+    date only, so the 'current market' table never mixes a months-old
+    competitor price with a fresh one. Premise names are resolved from
+    the normalized lookup_premise archive in a single batched query
+    (no N+1). Prices are the exact reported prices — never averaged.
+
+    Args:
+        market_item_ids: List of MarketItem ids.
+        latest_date: The latest observation date (datetime/date) or None.
+        shop: Optional Shop for location labelling only.
+
+    Returns:
+        List of dicts: {premise_code, premise, item, market_item_id,
+        price, unit_price, date, location} sorted by price ascending.
+    """
+    if not market_item_ids or latest_date is None:
+        return []
+    ids = sorted({int(i) for i in market_item_ids})
+
+    rows = (db.session.query(
+                MarketPriceObservation, MarketItem.raw_title)
+            .join(MarketItem, MarketPriceObservation.market_item_id == MarketItem.id)
+            .join(MarketSource, MarketItem.source_id == MarketSource.id)
+            .filter(MarketPriceObservation.market_item_id.in_(ids),
+                    MarketSource.is_active.is_(True),
+                    MarketPriceObservation.observed_at == latest_date)
+            .order_by(MarketPriceObservation.regular_price.asc()).all())
+
+    codes = sorted({o.premise_code for o, _ in rows if o.premise_code})
+    names = {}
+    if codes:
+        placeholders = ','.join(f':pc{i}' for i in range(len(codes)))
+        params = {f'pc{i}': c for i, c in enumerate(codes)}
+        for r in db.session.execute(text(
+                f'SELECT premise_code, premise FROM lookup_premise '
+                f'WHERE premise_code IN ({placeholders})'), params):
+            names[r[0]] = r[1]
+
+    snapshot = []
+    for o, title in rows:
+        snapshot.append({
+            'premise_code': o.premise_code,
+            'premise': names.get(o.premise_code) or o.premise_code,
+            'item': title,
+            'market_item_id': o.market_item_id,
+            'price': _r2(float(o.regular_price)) if o.regular_price is not None else None,
+            'unit_price': _r2(float(o.normalized_unit_price))
+                          if o.normalized_unit_price is not None else None,
+            'date': o.observed_at.date().isoformat() if o.observed_at else None,
+            'location': ', '.join(filter(None, [o.district, o.state])) or 'National',
+        })
+    return snapshot
+
+
 def get_market_stats(product_id, shop=None, page=1, per_page=15):
     """Aggregate statistics for one shop product's verified market matches.
 
@@ -402,7 +665,9 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
     scaled = []          # Market prices scaled to the product's package size
     match_meta = []      # Per-match metadata for the UI breakdown
     raw_observations = [] # Raw observation dicts for the transparency table
+    premise_codes = set()  # Distinct reporting stores (premise-level sources)
     primary_locale = 'national'  # Track the dominant localization scope
+    _loaded_obs = []     # Observation lists per match (for date range)
 
     for m in matches:
         # Step 4: Load observations with geographic fallback chain.
@@ -410,6 +675,7 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
         # or national in scope.
         obs_list, locale_note = _fetch_localized_observations(
             m.market_item_id, shop)
+        _loaded_obs.append(obs_list)
 
         # Track the dominant locale for display purposes.
         # If any match uses national fallback, note that in the summary.
@@ -440,6 +706,13 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
             # Example: RM 55.28/kg * 0.25 kg = RM 13.82 per tube.
             scaled.append(float(up) * effective_qty)
 
+            # Track distinct reporting premises (Phase 6 premise-level
+            # observations) so the stats can report how many stores the
+            # market data actually covers.
+            obs_premise = getattr(obs, 'premise_code', None)
+            if obs_premise:
+                premise_codes.add(obs_premise)
+
             # Collect raw observation for the transparency table.
             # This gives users visibility into the actual KPDN data points
             # that feed the market summary statistics.
@@ -458,6 +731,7 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
                         if obs.observed_at else '—',
                 'item': m.market_item.raw_title,
                 'package': _pkg_label(m.market_item),
+                'premise': obs_premise,   # code; mapped to a name below
                 'price': round(float(obs.regular_price), 2),
                 'location': ', '.join(filter(None, [
                     obs_district, obs_state])) or 'National',
@@ -476,8 +750,82 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
     shop_price = (float(product.selling_price)
                   if product.selling_price is not None else None)
 
+    # Step 6.5: Resolve premise names for the transparency table from the
+    # raw lookup_premise archive (premise metadata is NOT duplicated on
+    # observations — it stays normalized in the archive table).
+    _premise_names = {}
+    if premise_codes:
+        codes = sorted(premise_codes)
+        placeholders = ','.join(f':pc{i}' for i in range(len(codes)))
+        params = {f'pc{i}': c for i, c in enumerate(codes)}
+        rows = db.session.execute(text(
+            f'SELECT premise_code, premise FROM lookup_premise '
+            f'WHERE premise_code IN ({placeholders})'), params).fetchall()
+        _premise_names = {r[0]: r[1] for r in rows}
+    # Swap codes for human-readable store names in the transparency table.
+    for entry in raw_observations:
+        code = entry.get('premise')
+        entry['premise'] = _premise_names.get(code) if code else None
+
     # Step 7: Compute statistics from the scaled prices.
     metrics = compute_metrics(scaled, shop_price)
+    # Phase 6: distinct reporting stores behind the observations.
+    metrics['premise_count'] = len(premise_codes)
+
+    # Phase 6A/6B: structured market tier + honest human-readable label.
+    # The UI shows WHICH market the stats describe (district / state /
+    # national) so national fallback is never passed off as local data.
+    # _fetch_localized_observations returns a locale NOTE string; map it
+    # back to the structured tier name it represents.
+    if primary_locale == 'national (no local data)':
+        tier_label = 'National (no sufficient local data)'
+        tier_name = 'national'
+    elif primary_locale == 'national':
+        tier_label = 'National'
+        tier_name = 'national'
+    elif shop_district and primary_locale == f'{shop_district}, {shop_state}':
+        tier_label = primary_locale
+        tier_name = 'district'
+    elif shop_state and primary_locale == shop_state:
+        tier_label = primary_locale
+        tier_name = 'state'
+    else:
+        tier_label = primary_locale or 'National'
+        tier_name = 'national'
+    metrics['market_tier'] = tier_name
+    metrics['market_tier_label'] = tier_label
+
+    # Phase 6A: latest / earliest observation dates across the matched
+    # items (from the already-loaded observation objects — no extra query).
+    _dates = [o.observed_at for obs_list in _loaded_obs
+              for o in obs_list if o.observed_at is not None]
+    metrics['latest_observed_at'] = (max(_dates).date().isoformat()
+                                     if _dates else None)
+    metrics['earliest_observed_at'] = (min(_dates).date().isoformat()
+                                       if _dates else None)
+
+    # Phase 6D: retailer position vs the market median (pure function).
+    position = market_position(shop_price, metrics.get('median'))
+    metrics.update(position)
+
+    # Phase 6E: price distribution quartiles (for the range visualization).
+    if scaled:
+        valid = sorted(float(p) for p in scaled if p is not None and p > 0)
+        if valid:
+            n = len(valid)
+            q1 = valid[n // 4] if n >= 4 else valid[0]
+            q3 = valid[(3 * n) // 4] if n >= 4 else valid[-1]
+            metrics['distribution'] = {
+                'q1': _r2(q1), 'median': metrics['median'],
+                'q3': _r2(q3),
+            }
+
+    # Phase 6C: store-level competitor snapshot from the LATEST market
+    # snapshot date only (no mixing of stale prices with fresh ones).
+    match_item_ids = [m.market_item_id for m in matches]
+    metrics['competitor_snapshot'] = _competitor_snapshot(
+        match_item_ids, (max(_dates) if _dates else None), shop)
+    metrics['snapshot_date'] = metrics['latest_observed_at']
 
     # Step 8: Build the localization description for the UI.
     # This tells the user whether their market data is local, state-level,

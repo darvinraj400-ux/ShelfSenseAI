@@ -16,6 +16,9 @@ instance/
 *.sqbpro
 .freebuff/
 
+# PriceCatcher Parquet cache (import_pricecatcher.py --local-dir)
+pc_cache/
+
 # IDE / OS
 .vscode/
 .idea/

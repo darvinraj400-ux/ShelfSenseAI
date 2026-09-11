@@ -79,6 +79,7 @@ Guardrails applied: {guardrails}
 PCAPA warning: {pcapa_warning}
 {pcapa_details}
 {regulatory_context}
+{mkt_context}
 Explain why this price is recommended. Be concise (2-3 sentences).
 If PCAPA warning is Yes, you MUST NOT suggest raising the price. The recommended price is the legal maximum given current constraints."""
 
@@ -148,6 +149,55 @@ def generate_pricing_explanation(product, market_stats, recommendation):
             f"RM{ceiling}. Emphasize that this is a strict legal compliance measure."
         )
 
+    # Phase 6: richer market context — which geographic tier the market
+    # data comes from, how many stores reported prices, and where the
+    # retailer's own price sits relative to the market median. All of
+    # this is descriptive context; the LLM never sets the price.
+    mkt_context = ""
+    if market_stats.get("median"):
+        bits = []
+        tier = market_stats.get("market_tier_label")
+        if tier and tier != "National":
+            bits.append(f"local market benchmark: {tier}")
+        if market_stats.get("premise_count"):
+            bits.append(f"{market_stats['premise_count']} premises reporting")
+        pos = market_stats.get("position")
+        dpct = market_stats.get("difference_percent")
+        if pos and dpct is not None and market_stats.get("n"):
+            bits.append(f"current price is {abs(dpct):.1f}% "
+                        f"{'above' if dpct > 0 else 'below'} the market median "
+                        f"({pos})")
+        if bits:
+            mkt_context = "Market context: " + "; ".join(bits) + "."
+
+    # Phase 7: decision-support context. These describe the deterministic
+    # recommendation (status, evidence strength, trend, guardrail effects)
+    # so the LLM can explain it in natural language. The LLM never
+    # computes or overrides the price itself.
+    p7_bits = []
+    status = recommendation.get("status")
+    if status and status != "INSUFFICIENT_DATA":
+        p7_bits.append(
+            f"the suggested action for the retailer is to {status.lower()} "
+            f"the price")
+    ev = recommendation.get("market_evidence")
+    if ev:
+        p7_bits.append(f"market evidence is {ev.lower()}")
+    td = recommendation.get("trend_direction")
+    if td and td != "insufficient_data":
+        tcp = recommendation.get("trend_change_percent")
+        p7_bits.append(
+            f"the market trend is {td.lower()}"
+            + (f" ({tcp:+.1f}%)" if tcp is not None else ""))
+    ge = recommendation.get("guardrail_effect")
+    if ge:
+        p7_bits.append(f"constraint applied: {ge}")
+    if p7_bits:
+        p7_bits.append(
+            "Do not suggest a different price; explain the given "
+            "recommendation using these facts.")
+        mkt_context = ((mkt_context + " ") if mkt_context else "") + " ".join(p7_bits)
+
     # --- Step 2: Format the complete prompt ---
     prompt = USER_PROMPT_TEMPLATE.format(
         product_name=product.name,
@@ -163,6 +213,7 @@ def generate_pricing_explanation(product, market_stats, recommendation):
         pcapa_warning=pcapa_warn,
         pcapa_details=pcapa_details,
         regulatory_context=regulatory_context,
+        mkt_context=mkt_context,
     )
 
     # --- Step 3: Attempt the Gemini API call ---

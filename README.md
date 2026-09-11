@@ -43,10 +43,16 @@ GEMINI_API_KEY=your_gemini_api_key
 ### Step 2 — Database Migration & Data Loading
 ```bash
 flask db upgrade
-python import_pricecatcher.py
+python import_pricecatcher.py --month 2026-08       # one month
+python import_pricecatcher.py --start-month 2026-06 --end-month 2026-08   # backfill range
 python scripts/etl_pricecatcher.py
 python seed_demo.py
 ```
+
+Both steps are **idempotent and non-destructive**:
+
+* `import_pricecatcher.py` downloads monthly PriceCatcher Parquet files and appends them to the raw archive (`price`, `lookup_item`, `lookup_premise`). Months coexist — importing a new month never deletes older months, and re-importing the same month inserts zero duplicates (a database unique constraint on `date + premise_code + item_code` guards the archive). `--local-dir ./pc_cache` caches downloaded files for offline re-runs.
+* `scripts/etl_pricecatcher.py` rebuilds **premise-level** `MarketPriceObservation` rows — one raw price record becomes one observation with its exact price, `premise_code`, state/district, and per-observation normalized unit price. It only rebuilds the PriceCatcher source's observations (ManaMurah/FAMA are untouched), keeps `MarketItem` ids stable so `ProductMarketMatch` survives, and is safe to rerun (zero duplicates via the `uq_premise_obs` unique index on `market_item_id + premise_code + observed_at`).
 
 ### Step 3 — Train the ML Model (IMPORTANT)
 
@@ -77,7 +83,18 @@ Model saved to ml/pricing_model.pkl (633 KB)
 
 > **Note:** The training requires downloading ~300 MB of parquet files from data.gov.my. The script is memory-efficient — it processes each month individually instead of loading all files at once.
 
-### Step 4 — Run the Application
+### Step 4 — Sync ManaMurah Market Data (Optional, Phase 5)
+
+ShelfSenseAI can augment its KPDN PriceCatcher data with **FAMA Panduan Harga Harian** daily prices via the [ManaMurah MCP server](https://github.com/manamurah/mcp-server) — a public, read-only MCP endpoint (no API key required):
+
+```bash
+python scripts/sync_market_data.py              # national grain, last 30 days
+python scripts/sync_market_data.py --days 14 --state johor   # state grain
+```
+
+The script is fully idempotent — run it as many times as you like; a second run inserts zero duplicates. It ingests only FAMA's independent daily catalogue (eggs, rice, staples) and never duplicates PriceCatcher data.
+
+### Step 5 — Run the Application
 ```bash
 flask run
 ```
@@ -92,6 +109,13 @@ flask run
 | **3E** | ML Pricing Engine | RandomForestRegressor trained on 5.4M+ real KPDN observations (2022–2026) |
 | **3F** | AI Explainer | Gemini 3.5 Flash Lite with 3-layer fault-tolerant fallback |
 | **4** | Hardening | Dashboard analytics, KPDN price control guardrails, Explainable AI, 84/84 tests passing |
+| **5** | Multi-Source Market Data | ManaMurah MCP client + source-agnostic ingestion layer, idempotent FAMA daily-price sync |
+| **6** | Historical Archive + Premise-Level Observations | Configurable monthly PriceCatcher import (no `replace`), raw archive with unique natural key, premise-level `MarketPriceObservation` (100% raw retention), premise column in Explainable AI table |
+| **6 (MI)** | Market Intelligence & Visualization | Market summary stats (min/median/mean/max/spread/premise count), geographic tier labeling, latest-snapshot competitor table with store names, market position (Below/Near/Above vs median), min→max distribution bar, SVG historical trend chart (server-side `PERCENTILE_CONT` medians), pricing-engine market context (guardrails untouched) |
+| **7** | Intelligent Pricing Decision Support | Explainable recommendation status (MAINTAIN/REDUCE/INCREASE with documented tolerance), market trend classification (Rising/Stable/Falling/insufficient), market evidence rating (Strong/Moderate/Limited/Unavailable), guardrail-effect explanations, decision-support badges in the pricing pane; existing guardrails/ML/Gemini roles unchanged, Gemini explains but never sets prices, 159 tests passing |
+| **7.1** | Validation & Corrective Fixes | Full read-only audit (all scenarios validated); SME margin "blend" corrected to an accurately-documented hard target-margin floor (behaviour unchanged), pricing API now passes the shop context so the JS pane uses the same district→state→national tier as the page, recommendation-difference badge wording fixed, 161 tests passing |
+| **8** | Pricing Decision Workflow & Auditability | Every reviewed recommendation is snapshotted as a `PricingRecommendationDecision` (recommended price, current price, engine status, market tier/median, evidence, trend, guardrails, timestamp). Retailer explicitly **Apply**s (atomic: price update + existing PriceHistory + decision APPLIED) or **Dismiss**es with a recorded reason. Stale-snapshot protection rejects applies when the product price changed after the snapshot; the applied price is always recomputed server-side by the deterministic engine (client-supplied prices are ignored). Recommendation-decision history card on the product page; staff role read-only, cross-shop 403, CSRF-protected POST-only actions, 175 tests passing |
+| **9** | Shop-wide Pricing Intelligence Dashboard & Reporting | `/pricing-dashboard` (owner/manager): summary cards (total / market-covered / above-below-market / pending / applied-dismissed), pricing opportunity table with deterministic priority sorting (engine status + evidence — never moves a price), filters (status, decision, evidence, tier, search), server-side sorting + pagination, lightweight distribution panels (status / decisions / market position), proper empty states, product drill-down into the Phase 8 workflow. Read-only GET: no price changes, no decision records created by dashboard views; reuses engine + market services with `skip_llm` (Gemini never involved), 185 tests passing |
 | **FYP** | Presentation | `DEMO_ROLES_AND_SCRIPT.md` (5-part speaking framework), `TEAM_ROLE_MASTERY_GUIDE.md` (deep comprehension) |
 
 ## ML Training Details

@@ -103,40 +103,136 @@
   </div>
   {% endif %}
 
-  <!-- Market Summary Card (Phase 3D) -->
+  <!-- Market Summary Card (Phase 3D + Phase 6A/6B/6D/6E) -->
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">Market Summary</h5>
+    <h5 class="mb-3">Market Summary
+      {% if stats and stats.n > 0 and stats.market_tier_label %}
+      <span class="badge bg-primary ms-2">Market benchmark: {{ stats.market_tier_label }}</span>
+      {% endif %}
+    </h5>
     <div id="stats-body">
       {% if stats and stats.n > 0 %}
       <div class="row g-3">
         <div class="col-md-3">
-          <small class="text-muted">Market Range ({{ stats.n }} observations)</small><br>
+          <small class="text-muted">Market Range ({{ stats.n }} observations · {{ stats.premise_count }} stores)</small><br>
           <strong>RM{{ "%.2f"|format(stats.min) }} – RM{{ "%.2f"|format(stats.max) }}</strong>
         </div>
         <div class="col-md-2"><small class="text-muted">Median</small><br><strong>RM{{ "%.2f"|format(stats.median) }}</strong></div>
         <div class="col-md-2"><small class="text-muted">Mean</small><br>RM{{ "%.2f"|format(stats.mean) }}</div>
         <div class="col-md-2"><small class="text-muted">Spread</small><br>RM{{ "%.2f"|format(stats.spread) }}</div>
         <div class="col-md-3">
-          <small class="text-muted">Your price vs median</small><br>
-          {% if stats.shop_price is not none and stats.comparison %}
-            {% if stats.comparison.at_median %}
-              <span class="badge bg-secondary">RM{{ "%.2f"|format(stats.shop_price) }} — at market median</span>
-            {% elif stats.comparison.above %}
-              <span class="badge bg-warning text-dark">RM{{ "%.2f"|format(stats.shop_price) }} · +{{ stats.comparison.pct }}% above median</span>
+          <small class="text-muted">Latest market data</small><br>
+          {% if stats.latest_observed_at %}{{ stats.latest_observed_at }}{% else %}—{% endif %}
+        </div>
+      </div>
+
+      <!-- Phase 6D: your market position -->
+      <div class="row g-3 mt-1">
+        <div class="col-md-6">
+          <small class="text-muted">Your market position</small><br>
+          {% if stats.position %}
+            {% if stats.position == 'Above Market' %}
+              <span class="badge bg-warning text-dark">RM{{ "%.2f"|format(stats.shop_price) }} · +{{ "%.1f"|format(stats.difference_percent) }}% above market median</span>
+            {% elif stats.position == 'Below Market' %}
+              <span class="badge bg-success">RM{{ "%.2f"|format(stats.shop_price) }} · {{ "%.1f"|format(stats.difference_percent) }}% below market median</span>
             {% else %}
-              <span class="badge bg-success">RM{{ "%.2f"|format(stats.shop_price) }} · −{{ stats.comparison.pct }}% below median</span>
+              <span class="badge bg-secondary">RM{{ "%.2f"|format(stats.shop_price) }} · near market median</span>
             {% endif %}
+            <small class="text-muted d-block">Median RM{{ "%.2f"|format(stats.median) }} · difference RM{{ "%.2f"|format(stats.difference) }} ({{ "%.1f"|format(stats.difference_percent) }}%) · "Near market" = within 5% of the median</small>
           {% else %}
             <span class="badge bg-secondary">Set a selling price to compare</span>
           {% endif %}
         </div>
       </div>
+
+      <!-- Phase 6E: price distribution bar (min — median — max, with your price) -->
+      {% if stats.distribution is defined and stats.distribution and stats.min is not none and stats.max is not none and stats.max > stats.min %}
+      <div class="mt-3">
+        <small class="text-muted d-block mb-1">Where your price sits in the market range</small>
+        <div class="position-relative" style="height:26px; background:#e9ecef; border-radius:13px;">
+          <!-- quartile shading -->
+          <div class="position-absolute" style="left:{{ ((stats.distribution.q1 - stats.min) / stats.spread * 100)|round(1) }}%; width:{{ ((stats.distribution.q3 - stats.distribution.q1) / stats.spread * 100)|round(1) }}%; top:0; bottom:0; background:#cfe2ff; border-radius:13px;"></div>
+          <!-- median marker -->
+          <div class="position-absolute bg-dark" style="left:{{ ((stats.median - stats.min) / stats.spread * 100)|round(1) }}%; top:0; bottom:0; width:2px;"></div>
+          <!-- your price marker -->
+          {% if stats.shop_price is not none and stats.min <= stats.shop_price <= stats.max %}
+          <div class="position-absolute bg-danger" style="left:{{ ((stats.shop_price - stats.min) / stats.spread * 100)|round(1) }}%; top:-3px; bottom:-3px; width:3px; border-radius:2px;"></div>
+          {% endif %}
+        </div>
+        <div class="d-flex justify-content-between small text-muted">
+          <span>Lowest RM{{ "%.2f"|format(stats.min) }}</span>
+          <span>Median RM{{ "%.2f"|format(stats.median) }}</span>
+          <span>Highest RM{{ "%.2f"|format(stats.max) }}</span>
+        </div>
+        {% if stats.shop_price is not none and stats.min <= stats.shop_price <= stats.max %}
+        <small class="text-danger">↑ your price RM{{ "%.2f"|format(stats.shop_price) }}</small>
+        {% elif stats.shop_price is not none %}
+        <small class="text-danger">Your price RM{{ "%.2f"|format(stats.shop_price) }} is outside the current market range.</small>
+        {% endif %}
+      </div>
+      {% endif %}
+
       <small class="text-muted d-block mt-2">{{ stats.scaling_note }}</small>
       {% if stats.localization is defined and stats.localization %}
       <small class="text-muted d-block">📍 {{ stats.localization }}</small>
       {% endif %}
       {% else %}
-      <p class="text-muted mb-0">No verified market data yet — verify a suggestion above to see the market summary.</p>
+      <p class="text-muted mb-0">No sufficient market observations are currently available for this product{% if shop and shop.district %} in {{ shop.district }}{% endif %}.</p>
+      <p class="text-muted mb-0 small">The system will fall back to state or national data when sufficient observations are available. Verify a market match above to anchor this product to market data.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Phase 6C: Competitor snapshot — latest market date only -->
+  {% if stats and stats.n > 0 and stats.competitor_snapshot is defined and stats.competitor_snapshot %}
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">Competitor Prices <small class="text-muted">(market snapshot {{ stats.snapshot_date }} — latest reporting date)</small></h5>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped mb-0">
+        <thead class="table-light">
+          <tr><th>Store</th><th>Location</th><th class="text-end">Price</th><th>Date</th><th class="text-end">vs Your Price</th></tr>
+        </thead>
+        <tbody>
+          {% for c in stats.competitor_snapshot[:10] %}
+          <tr>
+            <td>{{ c.premise }}</td>
+            <td><small>{{ c.location }}</small></td>
+            <td class="text-end"><strong>RM{{ "%.2f"|format(c.price) }}</strong></td>
+            <td>{{ c.date }}</td>
+            <td class="text-end">
+              {% if stats.shop_price is not none and c.price is not none %}
+                {% set d = stats.shop_price - c.price %}
+                {% if d > 0.005 %}<span class="text-success">+RM{{ "%.2f"|format(d) }}</span>
+                {% elif d < -0.005 %}<span class="text-danger">−RM{{ "%.2f"|format(-d) }}</span>
+                {% else %}<span class="text-muted">same</span>{% endif %}
+            {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if stats.competitor_snapshot|length > 10 %}
+    <small class="text-muted d-block mt-2">Showing 10 of {{ stats.competitor_snapshot|length }} stores in the latest snapshot.</small>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Phase 6F/6G: Market trend -->
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">Market Trend
+      {% if trend and trend.tier_label %}<small class="text-muted ms-2">{{ trend.tier_label }} · last 90 days</small>{% endif %}
+    </h5>
+    <div id="trend-body">
+      {% if trend and trend.points %}
+      <svg id="trend-chart" width="100%" height="180" viewBox="0 0 600 180" preserveAspectRatio="none" role="img" aria-label="Market price trend"></svg>
+      <div class="d-flex justify-content-between small text-muted mt-1">
+        <span>{{ trend.points[0].date }}</span>
+        <span>median line · shaded min–max band</span>
+        <span>{{ trend.points[-1].date }}</span>
+      </div>
+      {% else %}
+      <p class="text-muted mb-0">No historical observations available for this product in the last 90 days.</p>
       {% endif %}
     </div>
   </div>
@@ -192,6 +288,7 @@
               <th>Date</th>
               <th>Product</th>
               <th>Package</th>
+              <th>Premise</th>
               <th>Tier</th>
               <th>Location</th>
               <th class="text-end">Price (RM)</th>
@@ -203,6 +300,7 @@
               <td>{{ obs.date }}</td>
               <td><small>{{ obs.item }}</small></td>
               <td>{{ obs.package }}</td>
+              <td><small>{{ obs.premise or '—' }}</small></td>
               <td>
                 {% if obs.tier == 'district' %}
                   <span class="badge bg-success">District</span>
@@ -295,9 +393,9 @@
           <small class="text-muted">Difference</small><br>
           {% if pricing.diff_pct is not none %}
             {% if pricing.diff_pct > 0.5 %}
-              <span class="badge bg-warning text-dark">+{{ pricing.diff_pct }}% (below your price)</span>
+              <span class="badge bg-warning text-dark">+{{ pricing.diff_pct }}% (above your price)</span>
             {% elif pricing.diff_pct < -0.5 %}
-              <span class="badge bg-success">{{ pricing.diff_pct }}% (above your price)</span>
+              <span class="badge bg-success">{{ pricing.diff_pct }}% (below your price)</span>
             {% else %}
               <span class="badge bg-secondary">≈ same as your price</span>
             {% endif %}
@@ -317,9 +415,39 @@
         </div>
       </div>
 
-      {% if can_edit %}
+      {% if pricing.status and pricing.status != 'INSUFFICIENT_DATA' %}
       <div class="mb-3">
+        {% if pricing.status == 'REDUCE' %}
+          <span class="badge bg-warning text-dark fs-6">Suggested action: REDUCE price</span>
+        {% elif pricing.status == 'INCREASE' %}
+          <span class="badge bg-info text-dark fs-6">Suggested action: INCREASE price</span>
+        {% else %}
+          <span class="badge bg-success fs-6">MAINTAIN current price</span>
+        {% endif %}
+        {% if pricing.market_evidence %}
+          <span class="badge bg-secondary ms-1">Market evidence: {{ pricing.market_evidence }}</span>
+        {% endif %}
+        {% if pricing.trend_direction and pricing.trend_direction != 'insufficient_data' %}
+          <span class="badge bg-light text-dark border ms-1">Trend: {{ pricing.trend_direction }}{% if pricing.trend_change_percent is not none %} ({{ "%+.1f"|format(pricing.trend_change_percent) }}%){% endif %}</span>
+        {% endif %}
+      </div>
+      {% endif %}
+      {% if pricing.guardrail_effect %}
+      <div class="alert alert-info py-2 small mb-3">{{ pricing.guardrail_effect }}</div>
+      {% endif %}
+      {% if can_edit %}
+      <div class="mb-3" id="decision-actions"
+           data-decision-id="{{ pending_decision.id if pending_decision else '' }}"
+           data-decision-state="{{ pending_decision.decision if pending_decision else 'NONE' }}"
+           data-snapshot-current="{{ pending_decision.current_price if pending_decision and pending_decision.current_price is not none else '' }}">
+        {% if pending_decision %}
+        <small class="text-muted d-block mb-1">
+          Decision record #{{ pending_decision.id }} — generated {{ pending_decision.generated_at.strftime('%d %b %Y %H:%M') }} UTC
+        </small>
+        {% endif %}
         <button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>
+        <button class="btn btn-outline-secondary" id="btn-dismiss"
+                data-bs-toggle="modal" data-bs-target="#dismissModal">Dismiss</button>
         <span class="text-muted ms-2" id="pricing-status"></span>
       </div>
       {% endif %}
@@ -346,6 +474,75 @@
       <li>{{ r }}</li>
       {% endfor %}
     </ul>
+  </div>
+  {% endif %}
+
+  <!-- Phase 8: Pricing Recommendation History (retailer decision audit) -->
+  {% if can_edit and recent_decisions %}
+  <div class="card p-4 mb-4">
+    <h5 class="mb-3">Pricing Recommendation History
+      <small class="text-muted ms-2">system recommendation vs retailer decision (latest {{ recent_decisions|length }})</small>
+    </h5>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped mb-0">
+        <thead class="table-light">
+          <tr><th>Date</th><th class="text-end">Current</th><th class="text-end">Recommended</th>
+              <th>Status</th><th>Decision</th><th>User</th></tr>
+        </thead>
+        <tbody>
+          {% for d in recent_decisions %}
+          <tr>
+            <td>{{ d.generated_at.strftime('%d %b %y %H:%M') }}</td>
+            <td class="text-end">{% if d.current_price is not none %}RM{{ "%.2f"|format(d.current_price) }}{% else %}—{% endif %}</td>
+            <td class="text-end"><strong>RM{{ "%.2f"|format(d.recommended_price) }}</strong></td>
+            <td>{{ d.recommendation_status }}</td>
+            <td>
+              {% if d.decision == 'APPLIED' %}
+                <span class="badge bg-success">APPLIED</span>
+              {% elif d.decision == 'DISMISSED' %}
+                <span class="badge bg-secondary" title="{{ d.decision_reason or '' }}">DISMISSED</span>
+              {% else %}
+                <span class="badge bg-warning text-dark">PENDING</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if d.decider %}{{ d.decider.email.split('@')[0] }}{% else %}—{% endif %}
+              {% if d.decision_reason %}<small class="text-muted d-block">{{ d.decision_reason }}</small>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <small class="text-muted d-block mt-2">"Status" is the system's suggestion (REDUCE / INCREASE / MAINTAIN); "Decision" is what the retailer chose. Applied price changes also appear in the price history on the Details tab.</small>
+  </div>
+  {% endif %}
+
+  <!-- Phase 8: Dismiss Recommendation modal -->
+  {% if can_edit %}
+  <div class="modal fade" id="dismissModal" tabindex="-1" aria-labelledby="dismissModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="dismissModalLabel">Dismiss Recommendation</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small">Record why this recommendation is not being followed. The reason is stored in the pricing recommendation history for audit purposes.</p>
+          <label class="form-label" for="dismiss-reason">Reason</label>
+          <select class="form-select mb-2" id="dismiss-reason">
+            {% for r in dismiss_reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+          </select>
+          <label class="form-label" for="dismiss-note">Additional note <span class="text-muted">(optional, required for "Other")</span></label>
+          <textarea class="form-control" id="dismiss-note" rows="2" maxlength="200"></textarea>
+          <div class="text-danger small mt-1 d-none" id="dismiss-error"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-outline-danger" id="btn-confirm-dismiss">Confirm Dismissal</button>
+        </div>
+      </div>
+    </div>
   </div>
   {% endif %}
 
@@ -545,7 +742,42 @@
         renderVerified(data.verified || []);
         renderSuggested(data.suggested || []);
         renderStats(data.stats);
+        renderTrendChart(window.__TREND__);
     }
+
+    // ---------- Phase 6F: SVG market trend chart ----------
+    // Pure client-side rendering of server-computed points (no library,
+    // no extra requests). Draws a median line + shaded min-max band.
+    function renderTrendChart(trend) {
+        const svg = document.getElementById('trend-chart');
+        if (!svg || !trend || !trend.points || trend.points.length === 0) return;
+        const pts = trend.points;
+        const W = 600, H = 180, PAD = 10;
+        let lo = Infinity, hi = -Infinity;
+        pts.forEach(p => { lo = Math.min(lo, p.min); hi = Math.max(hi, p.max); });
+        if (hi === lo) { hi = lo + 1; }
+        const x = i => PAD + i * (W - 2 * PAD) / Math.max(1, pts.length - 1);
+        const y = v => H - PAD - (v - lo) / (hi - lo) * (H - 2 * PAD);
+        const fmt = v => 'RM' + v.toFixed(2);
+        // Min-max band.
+        let band = 'M' + pts.map((p, i) => x(i) + ',' + y(p.max)).join(' L');
+        band += ' L' + pts.slice().reverse().map((p, j) => x(pts.length - 1 - j) + ',' + y(p.min)).join(' L') + ' Z';
+        const medianLine = 'M' + pts.map((p, i) => x(i) + ',' + y(p.median)).join(' L');
+        const minLine = 'M' + pts.map((p, i) => x(i) + ',' + y(p.min)).join(' L');
+        const maxLine = 'M' + pts.map((p, i) => x(i) + ',' + y(p.max)).join(' L');
+        const dots = pts.map((p, i) =>
+            `<circle cx="${x(i)}" cy="${y(p.median)}" r="3" fill="#0d6efd"><title>${p.date}: median ${fmt(p.median)} (${p.observations} obs, ${p.premises} stores)</title></circle>`
+        ).join('');
+        svg.innerHTML =
+            `<path d="${band}" fill="rgba(13,110,253,0.12)"/>` +
+            `<path d="${minLine}" stroke="#adb5bd" stroke-width="1" fill="none"/>` +
+            `<path d="${maxLine}" stroke="#adb5bd" stroke-width="1" fill="none"/>` +
+            `<path d="${medianLine}" stroke="#0d6efd" stroke-width="2.5" fill="none"/>` + dots;
+    }
+    window.__TREND__ = {{ trend|tojson if trend is defined and trend is not none else 'null' }};
+    // Initial render (page may load directly on this tab after actions).
+    document.addEventListener('DOMContentLoaded', () => renderTrendChart(window.__TREND__));
+    renderTrendChart(window.__TREND__);
 
     // ---------- search button ----------
     const btn = document.getElementById('btn-search');
@@ -597,8 +829,8 @@
         var money = function(v) { return v === null || v === undefined ? '—' : 'RM' + Number(v).toFixed(2); };
         var diffBadge = '';
         if (data.diff_pct !== null && data.diff_pct !== undefined) {
-            if (data.diff_pct > 0.5) diffBadge = '<span class="badge bg-warning text-dark">+' + data.diff_pct + '% (below your price)</span>';
-            else if (data.diff_pct < -0.5) diffBadge = '<span class="badge bg-success">' + data.diff_pct + '% (above your price)</span>';
+            if (data.diff_pct > 0.5) diffBadge = '<span class="badge bg-warning text-dark">+' + data.diff_pct + '% (above your price)</span>';
+            else if (data.diff_pct < -0.5) diffBadge = '<span class="badge bg-success">' + data.diff_pct + '% (below your price)</span>';
             else diffBadge = '<span class="badge bg-secondary">≈ same as your price</span>';
         } else {
             diffBadge = '<span class="badge bg-secondary">No current price set</span>';
@@ -611,7 +843,38 @@
         var llmBlock = data.llm_explanation
             ? '<div class="card p-4 mb-4 border-primary"><h5 class="mb-2">AI Assistant Insight</h5><p class="mb-0" style="font-size:1.05em;line-height:1.6">' + esc(data.llm_explanation) + '</p></div>'
             : '';
-        var applyBtn = CAN_EDIT ? '<button class="btn btn-primary" id="btn-apply-price">✅ Apply Recommendation</button>' : '';
+        // Phase 7: suggested-action + evidence + trend badges.
+        var statusBadges = '';
+        if (data.status && data.status !== 'INSUFFICIENT_DATA') {
+            var sLabel = data.status === 'REDUCE' ? 'Suggested action: REDUCE price'
+                       : data.status === 'INCREASE' ? 'Suggested action: INCREASE price'
+                       : 'MAINTAIN current price';
+            var sClass = data.status === 'REDUCE' ? 'bg-warning text-dark'
+                       : data.status === 'INCREASE' ? 'bg-info text-dark' : 'bg-success';
+            statusBadges = '<div class="mb-3"><span class="badge fs-6 ' + sClass + '">' + sLabel + '</span>';
+            if (data.market_evidence) {
+                statusBadges += ' <span class="badge bg-secondary ms-1">Market evidence: ' + esc(data.market_evidence) + '</span>';
+            }
+            if (data.trend_direction && data.trend_direction !== 'insufficient_data') {
+                var tPct = (data.trend_change_percent === null || data.trend_change_percent === undefined)
+                    ? '' : ' (' + (data.trend_change_percent > 0 ? '+' : '') + Number(data.trend_change_percent).toFixed(1) + '%)';
+                statusBadges += ' <span class="badge bg-light text-dark border ms-1">Trend: ' + esc(data.trend_direction) + tPct + '</span>';
+            }
+            statusBadges += '</div>';
+        }
+        var guardrailNote = data.guardrail_effect
+            ? '<div class="alert alert-info py-2 small mb-3">' + esc(data.guardrail_effect) + '</div>'
+            : '';
+        // Phase 8: the JS pane reuses the server-rendered decision record
+        // (snapshot id + state) so Apply/Dismiss always act on a persisted
+        // decision — never on a client-side price.
+        var actions = document.getElementById('decision-actions');
+        var decisionId = actions ? actions.dataset.decisionId : '';
+        var applyBtn = CAN_EDIT
+            ? '<button class="btn btn-primary" id="btn-apply-price" ' +
+              (decisionId ? '' : 'disabled title="Review the page to record a decision first"') + '>✅ Apply Recommendation</button>' +
+              (decisionId ? '<button class="btn btn-outline-secondary" id="btn-dismiss" data-bs-toggle="modal" data-bs-target="#dismissModal">Dismiss</button>' : '')
+            : '';
         el.innerHTML =
             '<div class="row align-items-center mb-3">' +
             '<div class="col-md-4"><small class="text-muted">Recommended Price</small><br><h3 class="text-primary mb-0">' + money(data.recommended_price) + '</h3></div>' +
@@ -619,10 +882,13 @@
             '<div class="col-md-3"><small class="text-muted">Difference</small><br>' + diffBadge + '</div>' +
             '<div class="col-md-2"><small class="text-muted">Confidence</small><br>' + confBadge + '</div>' +
             '</div>' +
+            statusBadges +
+            guardrailNote +
             '<div class="mb-3">' + applyBtn + ' <span class="text-muted ms-2" id="pricing-status"></span></div>' +
             warnings + llmBlock +
             '<small class="text-muted d-block">Cost floor: ' + money(data.cost_floor) + ' · Stock: ' + data.stock_level + ' units · Velocity: ~' + data.sales_velocity + '/day</small>';
-        // Rebind apply button
+        // Rebind apply button — posts to the decision-apply endpoint (server
+        // recomputes the price; a stale snapshot is rejected with 409).
         var applyBtnEl = document.getElementById('btn-apply-price');
         if (applyBtnEl) {
             applyBtnEl.addEventListener('click', async function () {
@@ -630,16 +896,24 @@
                 status.textContent = 'Applying…';
                 applyBtnEl.disabled = true;
                 try {
-                    var resp = await api('/api/product/' + PRODUCT_ID + '/apply-price', 'POST');
+                    if (!decisionId) throw new Error('No decision record — reload the page first.');
+                    var resp = await api('/api/decision/' + decisionId + '/apply', 'POST');
                     status.textContent = resp.message || 'Price updated!';
-                    // Refresh the page data
                     window.location.reload();
                 } catch (e) {
-                    status.textContent = 'Error: ' + e.message;
-                } finally {
+                    status.textContent = e.message;
+                    if (String(e.message).indexOf('outdated') !== -1) {
+                        status.parentElement.classList.add('text-danger');
+                    }
                     applyBtnEl.disabled = false;
                 }
             });
+        }
+        // Rebind dismiss button — the modal markup is server-rendered.
+        var dismissBtnEl = document.getElementById('btn-dismiss');
+        if (dismissBtnEl) {
+            dismissBtnEl.setAttribute('data-bs-toggle', 'modal');
+            dismissBtnEl.setAttribute('data-bs-target', '#dismissModal');
         }
     }
 
@@ -655,6 +929,48 @@
             if (el) el.innerHTML = '<p class="text-danger">Error loading pricing: ' + esc(e.message) + '</p>';
         });
     });
+
+    // ---------- Phase 8: dismiss recommendation (modal confirm) ----------
+    // Server validates the reason; this only collects the choice.
+    var confirmDismiss = document.getElementById('btn-confirm-dismiss');
+    if (confirmDismiss) {
+        confirmDismiss.addEventListener('click', async function () {
+            var actions = document.getElementById('decision-actions');
+            var decisionId = actions ? actions.dataset.decisionId : '';
+            var errEl = document.getElementById('dismiss-error');
+            errEl.classList.add('d-none');
+            if (!decisionId) {
+                errEl.textContent = 'No decision record found — reload the page first.';
+                errEl.classList.remove('d-none');
+                return;
+            }
+            var reason = document.getElementById('dismiss-reason').value;
+            var note = document.getElementById('dismiss-note').value;
+            confirmDismiss.disabled = true;
+            try {
+                var resp = await fetch('/api/decision/' + decisionId + '/dismiss', {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: reason, note: note })
+                });
+                var data = {};
+                try { data = await resp.json(); } catch (e) { /* non-JSON */ }
+                if (!resp.ok) throw new Error(data.message || ('HTTP ' + resp.status));
+                var status = document.getElementById('pricing-status');
+                if (status) status.textContent = data.message || 'Recommendation dismissed.';
+                // Hide the modal, then refresh so history + buttons re-render.
+                var modalEl = document.getElementById('dismissModal');
+                var modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+                window.location.reload();
+            } catch (e) {
+                errEl.textContent = e.message;
+                errEl.classList.remove('d-none');
+            } finally {
+                confirmDismiss.disabled = false;
+            }
+        });
+    }
 
     // Pagination for competitor observations table.
     // Fetches page N from the API and re-renders the observations table.
@@ -675,6 +991,7 @@
                     '<td>' + esc(o.date) + '</td>'+
                     '<td><small>' + esc(o.item) + '</small></td>'+
                     '<td>' + esc(o.package) + '</td>'+
+                    '<td><small>' + esc(o.premise || '—') + '</small></td>'+
                     '<td>' + tierBadge(o.tier) + '</td>'+
                     '<td><small>' + esc(o.location) + '</small></td>'+
                     '<td class="text-end"><strong>RM' + o.price.toFixed(2) + '</strong></td>'+
@@ -690,7 +1007,7 @@
             }
             body.innerHTML = '<p class="text-muted mb-2">Showing '+data.recent_observations.length+' of '+data.observations_total+' observations (page '+data.observations_page+' of '+data.observations_pages+')</p>'+
                 '<div class="table-responsive"><table class="table table-sm table-striped mb-0"><thead class="table-light"><tr>'+
-                '<th>Date</th><th>Product</th><th>Package</th><th>Tier</th><th>Location</th><th class="text-end">Price (RM)</th>'+
+                '<th>Date</th><th>Product</th><th>Package</th><th>Premise</th><th>Tier</th><th>Location</th><th class="text-end">Price (RM)</th>'+
                 '</tr></thead><tbody>'+rows+'</tbody></table></div>' + pag;
         }).catch(function (e) {
             var body = document.getElementById('observations-body');

@@ -41,6 +41,7 @@ ARCHITECTURAL DECISIONS
 """
 import os
 import warnings
+from datetime import datetime, timedelta
 
 import joblib
 import numpy as np
@@ -48,7 +49,8 @@ import numpy as np
 from app import (  # noqa: E402
     db, Product, Inventory, PriceHistory
 )
-from services.market_analysis import get_market_stats, _product_base_quantity  # noqa: E402
+from services.market_analysis import (get_market_stats,           # noqa: E402
+                                      get_market_trend, _product_base_quantity)
 from services.llm_explainer import generate_pricing_explanation  # noqa: E402
 from utils.normalization import normalize_package_size  # noqa: E402
 
@@ -92,6 +94,128 @@ FEATURE_NAMES = [
 # MODEL LOADING
 # -------------------------------------------------
 _MODEL_CACHE = None  # Module-level cache to avoid repeated disk reads.
+
+
+# -------------------------------------------------
+# PHASE 7 — DECISION-SUPPORT SIGNALS (pure functions)
+#
+# These helpers turn the Phase 6 market-intelligence data into
+# deterministic, traceable pricing-context signals. They NEVER set the
+# final price — the existing guardrail pipeline below stays authoritative.
+# All thresholds are documented constants with dedicated unit tests
+# (tests/test_pricing_decision.py).
+# -------------------------------------------------
+
+# Recommendation status: changes smaller than this percentage of the
+# current price are reported as MAINTAIN (avoids meaningless one-cent
+# suggestions; matches the +/-0.5% band already used by the UI badges).
+STATUS_TOLERANCE_PCT = 0.5
+
+# Market trend classification: the median change between the FIRST and
+# LAST observation dates of the trend window. Changes within +/- this
+# band are "Stable". A span shorter than TREND_MIN_SPAN_DAYS (or fewer
+# than TREND_MIN_POINTS dates) is "insufficient_data" — one-day changes
+# are too noisy to act on, so no trend is reported for them.
+TREND_STABLE_BAND_PCT = 1.0
+TREND_MIN_POINTS = 2
+TREND_MIN_SPAN_DAYS = 7
+
+# Market evidence: how much real PriceCatcher evidence stands behind the
+# market statistics shown to the retailer (premise count + observation
+# count + geographic tier). Documented bands:
+#   Unavailable  n < 3            — not enough observations for statistics
+#   Limited      < 5 premises or < 20 observations
+#   Moderate     >= 3 premises and >= 5 observations
+#   Strong       >= 5 premises, >= 20 observations, district/state tier
+EVIDENCE_STRONG_PREMISES = 5
+EVIDENCE_STRONG_OBS = 20
+EVIDENCE_MODERATE_PREMISES = 3
+EVIDENCE_MODERATE_OBS = 5
+
+
+def _classify_trend(points):
+    """Classify the market trend from Phase 6 trend points.
+
+    Deterministic: compares the market median on the FIRST date with the
+    median on the LAST date of the (already date-bounded) trend window.
+
+    Args:
+        points: List of dicts from get_market_trend() with keys
+                'date' (ISO string) and 'median' (RM or None).
+
+    Returns:
+        {'direction': 'Rising' | 'Falling' | 'Stable' | 'insufficient_data',
+         'change_percent': float | None}
+    """
+    usable = [p for p in (points or [])
+              if p.get('median') is not None and p.get('date')]
+    if len(usable) < TREND_MIN_POINTS:
+        return {'direction': 'insufficient_data', 'change_percent': None}
+
+    first, last = usable[0], usable[-1]
+    try:
+        span_days = ((datetime.fromisoformat(last['date'])
+                      - datetime.fromisoformat(first['date'])).days)
+    except (TypeError, ValueError):
+        return {'direction': 'insufficient_data', 'change_percent': None}
+
+    if span_days < TREND_MIN_SPAN_DAYS or first['median'] <= 0:
+        return {'direction': 'insufficient_data', 'change_percent': None}
+
+    pct = (last['median'] - first['median']) / first['median'] * 100
+    if pct > TREND_STABLE_BAND_PCT:
+        direction = 'Rising'
+    elif pct < -TREND_STABLE_BAND_PCT:
+        direction = 'Falling'
+    else:
+        direction = 'Stable'
+    return {'direction': direction, 'change_percent': round(pct, 1)}
+
+
+def _market_evidence(stats):
+    """Rate the market evidence behind the Phase 6 statistics.
+
+    Pure function over a get_market_stats() result dict. Rates how much
+    independent store-level evidence the market benchmark rests on —
+    NOT an "AI confidence" (there is no probabilistic model here).
+
+    Returns 'Strong' | 'Moderate' | 'Limited' | 'Unavailable'.
+    """
+    n = stats.get('n') or 0
+    premises = stats.get('premise_count') or 0
+    if n < 3 or premises < 1:
+        return 'Unavailable'
+    tier = stats.get('market_tier')
+    if (premises >= EVIDENCE_STRONG_PREMISES
+            and n >= EVIDENCE_STRONG_OBS
+            and tier in ('district', 'state')):
+        return 'Strong'
+    if premises >= EVIDENCE_MODERATE_PREMISES and n >= EVIDENCE_MODERATE_OBS:
+        return 'Moderate'
+    return 'Limited'
+
+
+def recommendation_status(recommended_price, current_price,
+                          tolerance_pct=STATUS_TOLERANCE_PCT):
+    """Derive the action status from the final price vs the current price.
+
+    Deterministic and traced to the two inputs only:
+      recommended <  current (beyond tolerance) -> 'REDUCE'
+      recommended >  current (beyond tolerance) -> 'INCREASE'
+      |change| within tolerance                -> 'MAINTAIN'
+      no current price                         -> 'INSUFFICIENT_DATA'
+
+    Args:
+        recommended_price: Final guardrailed recommendation (RM) or None.
+        current_price: The shop's current selling price (RM) or None.
+        tolerance_pct: Band (in % of current price) treated as MAINTAIN.
+    """
+    if not recommended_price or not current_price or current_price <= 0:
+        return 'INSUFFICIENT_DATA'
+    pct = (recommended_price / current_price - 1) * 100
+    if abs(pct) <= tolerance_pct:
+        return 'MAINTAIN'
+    return 'REDUCE' if recommended_price < current_price else 'INCREASE'
 
 
 def _load_model():
@@ -358,7 +482,7 @@ def _compute_confidence(has_market_data, has_model, guardrails_triggered):
 # MAIN RECOMMENDATION FUNCTION
 # -------------------------------------------------
 
-def get_price_recommendation(product_id, shop=None):
+def get_price_recommendation(product_id, shop=None, skip_llm=False):
     """Generate a comprehensive price recommendation for one shop product.
 
     This is the primary entry point called by the API route and the
@@ -372,6 +496,13 @@ def get_price_recommendation(product_id, shop=None):
 
     Args:
         product_id: The integer ID of the shop Product.
+        shop: Optional Shop ORM object for geographic market filtering.
+        skip_llm: When True the Gemini explanation is NOT generated
+            (llm_explanation is None). Phase 9: the shop-wide dashboard
+            reads many recommendations at once and is a pure READ — the
+            explanation is descriptive only, so skipping it can never
+            change the recommended price, status, or any other field.
+            The product page and pricing API keep the default (False).
 
     Returns:
         A dict containing:
@@ -513,24 +644,26 @@ def get_price_recommendation(product_id, shop=None):
             f"(minimum 5% margin over cost RM{product.cost_price:.2f})"
         )
 
-    # Rule 1b: SME MARGIN CLAMP (Hypermarket Bias Protection)
+    # Rule 1b: SME TARGET-MARGIN FLOOR (Hypermarket Bias Protection)
     # The ML model is trained on KPDN data dominated by hypermarkets
     # (Lotus's, Mydin) which operate on 3-5% margins. A small kedai
     # runcit needs 20-40% margins to survive. If the ML prediction is
     # below the shop's target floor (cost * (1 + target_margin/100)),
-    # we blend the ML prediction with the user's target price to find
-    # a middle ground that respects both market reality and SME survival.
+    # the price is raised to that floor. This is a HARD deterministic
+    # minimum: the retailer's configured target margin always wins over
+    # market pressure when the two conflict (Phase 7.1: an earlier
+    # "60/40 blend" formulation was mathematically a no-op because
+    # max(blend, floor) == floor whenever candidate <= floor; the
+    # dead blend arithmetic has been removed and the behaviour is now
+    # documented as what it actually is — a hard target-margin floor).
     user_floor = round(float(product.cost_price) * (1 + float(product.target_margin) / 100), 2)
     if ml_prediction < user_floor:
-        # Blend: 60% user floor + 40% ML prediction — leans toward
-        # SME survival while still acknowledging market pressure.
-        blended = round(user_floor * 0.6 + ml_prediction * 0.4, 2)
-        # The blended price must never be below the user floor.
-        ml_prediction = max(blended, user_floor)
+        # Hard floor: never recommend below the SME target-margin price.
+        ml_prediction = user_floor
         guardrails_triggered = True
         guardrails_applied.append("sme_margin")
         reasoning.append(
-            f"SME margin premium applied: raised from RM{original_prediction:.2f} "
+            f"SME target-margin floor applied: raised from RM{original_prediction:.2f} "
             f"to RM{ml_prediction:.2f} (target margin {product.target_margin}% "
             f"to protect small shop viability against hypermarket pricing)"
         )
@@ -569,6 +702,7 @@ def get_price_recommendation(product_id, shop=None):
     else:
         reasoning.append("No verified market data \u2014 recommendation is rule-based only")
 
+
     # --- STEP 10: Feature importances (top 5 factors) ---
     importances = {}
     if has_model and "feature_importances" in model_data:
@@ -588,12 +722,106 @@ def get_price_recommendation(product_id, shop=None):
     if current_price and current_price > 0:
         diff_pct = round((ml_prediction / current_price - 1) * 100, 1)
 
+    # --- STEP 12b: Phase 7 decision-support context ---
+    # Trend signal reuses the Phase 6 trend query (server-side aggregation,
+    # date-bounded) — no duplicated market SQL here. The trend NEVER moves
+    # the price; it only enriches the explanation and evidence rating.
+    from app import ProductMarketMatch  # local import (mirrors STEP 5)
+    _mids = sorted({mid for (mid,) in (
+        ProductMarketMatch.query
+        .filter_by(shop_product_id=product_id, is_verified=True)
+        .with_entities(ProductMarketMatch.market_item_id).all())})
+    trend = get_market_trend(_mids, shop=shop) if _mids else         {'tier': None, 'tier_label': None, 'points': []}
+    trend_signal = _classify_trend(trend.get('points'))
+
+    # Market evidence rating (Strong/Moderate/Limited/Unavailable) over
+    # the same Phase 6 statistics the UI displays.
+    evidence = _market_evidence(market)
+
+    # Recommendation status: derived AFTER the guardrails from the final
+    # price vs the current price (MAINTAIN / REDUCE / INCREASE /
+    # INSUFFICIENT_DATA). Pure comparison — no new pricing logic.
+    status = recommendation_status(ml_prediction, current_price)
+
+    # Guardrail-effect explanation (STEP 20): when a guardrail changed the
+    # candidate, say so in human terms.
+    guardrail_effect = None
+    if 'cost_floor' in guardrails_applied and has_market_data             and market_median > 0 and market_median < ml_prediction:
+        guardrail_effect = (
+            f"The local market median (RM{market_median:.2f}) is below the "
+            f"minimum economically viable price for this product, so the "
+            f"recommendation prioritizes your cost floor "
+            f"(RM{round(float(product.cost_price) * (1 + MIN_MARGIN_FLOOR), 2):.2f}) "
+            f"rather than matching the market.")
+    elif 'regulatory_cap' in guardrails_applied:
+        guardrail_effect = (
+            f"Regulatory price constraint applied: the suggestion was capped "
+            f"at the KPDN ceiling of "
+            f"RM{float(product.government_ceiling_price):.2f}.")
+    elif 'sme_margin' in guardrails_applied:
+        guardrail_effect = (
+            f"Your target margin of {product.target_margin}% was protected: "
+            f"the market-informed candidate sat below your target-margin floor "
+            f"(cost \u00d7 {1 + float(product.target_margin) / 100:.2f} = "
+            f"RM{round(float(product.cost_price) * (1 + float(product.target_margin) / 100), 2):.2f}), "
+            f"so it was raised to that hard minimum.")
+    elif 'market_sanity' in guardrails_applied:
+        guardrail_effect = (
+            "The market-informed candidate fell outside the observed market "
+            "range, so it was clamped to a realistic price band.")
+
+    # Market context line for the reasoning list (traceable to inputs).
+    if has_market_data:
+        evidence_note = (
+            f"Market evidence is {evidence.lower()}: "
+            f"{market.get('premise_count')} premises reported "
+            f"{market.get('n')} observations "
+            f"({market.get('market_tier_label') or 'national scope'}).")
+        if trend_signal['direction'] == 'Rising':
+            trend_note = (f"Market prices have been rising "
+                          f"({trend_signal['change_percent']:+.1f}% over the observed period).")
+        elif trend_signal['direction'] == 'Falling':
+            trend_note = (f"Market prices have been falling "
+                          f"({trend_signal['change_percent']:+.1f}% over the observed period).")
+        elif trend_signal['direction'] == 'Stable':
+            trend_note = "Market prices have remained relatively stable over the observed period."
+        else:
+            trend_note = "Not enough market history to establish a price trend yet."
+    else:
+        evidence_note = ("No sufficient market observations were found for this "
+                         "product; the recommendation is based on your cost, "
+                         "target margin, sales/inventory context, and existing "
+                         "pricing rules.")
+        trend_note = None
+
+    # Phase 7: evidence/trend notes are appended AFTER the guardrail
+    # reasons so the traceability order reads: prediction -> constraints
+    # -> market context.
+    if evidence_note:
+        reasoning.append(evidence_note)
+    if trend_note:
+        reasoning.append(trend_note)
+    if guardrail_effect:
+        reasoning.append(guardrail_effect)
+
     # --- STEP 13: Generate LLM explanation (Phase 3F) ---
+    # Phase 6: the payload now carries the full market-intelligence
+    # context (tier, premise count, retailer position) so the explainer
+    # can describe WHERE the shop sits in the local market. This is
+    # context only — the recommended price was already fixed by the
+    # guardrailed pipeline above and is NOT modified here.
     mkt_stats_payload = {
         "n": market.get("n", 0),
         "median": market.get("median"),
         "min": market.get("min"),
         "max": market.get("max"),
+        "premise_count": market.get("premise_count"),
+        "market_tier": market.get("market_tier"),
+        "market_tier_label": market.get("market_tier_label"),
+        "position": market.get("position"),
+        "difference": market.get("difference"),
+        "difference_percent": market.get("difference_percent"),
+        "latest_observed_at": market.get("latest_observed_at"),
     }
     llm_payload = {
         "recommended_price": ml_prediction,
@@ -601,9 +829,19 @@ def get_price_recommendation(product_id, shop=None):
         "guardrails_applied": guardrails_applied,
         "warnings": warnings_list,
         "diff_pct": diff_pct,
+        # Phase 7 decision-support context (explanatory only):
+        "status": status,
+        "market_evidence": evidence,
+        "trend_direction": trend_signal['direction'],
+        "trend_change_percent": trend_signal['change_percent'],
+        "guardrail_effect": guardrail_effect,
+        "target_margin": float(product.target_margin),
+        "sales_velocity": velocity,
+        "stock_level": stock_level,
     }
-    llm_explanation = generate_pricing_explanation(
-        product, mkt_stats_payload, llm_payload)
+    llm_explanation = (None if skip_llm
+                       else generate_pricing_explanation(
+                           product, mkt_stats_payload, llm_payload))
 
     # --- STEP 14: Return the complete recommendation payload ---
     return {
@@ -622,6 +860,15 @@ def get_price_recommendation(product_id, shop=None):
         "stock_level": stock_level,
         "sales_velocity": velocity,
         "llm_explanation": llm_explanation,
+        # Phase 7: decision-support context
+        "status": status,
+        "market_evidence": evidence,
+        "trend_direction": trend_signal['direction'],
+        "trend_change_percent": trend_signal['change_percent'],
+        "trend_tier_label": trend.get('tier_label'),
+        "guardrail_effect": guardrail_effect,
+        "evidence_note": evidence_note,
+        "trend_note": trend_note,
         "regulatory_cap_applied": regulatory_cap_applied,
         "government_ceiling_price": float(product.government_ceiling_price) if product.government_ceiling_price else None,
     }

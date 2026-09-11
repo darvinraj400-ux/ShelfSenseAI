@@ -39,6 +39,13 @@ from werkzeug.security import generate_password_hash
 
 PASSED = FAILED = 0
 TEST_SHOPS = ["PricingTestShopA", "PricingTestShopB"]
+# Every fixture name this suite creates, including the randomized
+# GeoCtx_* shops and TestSrc_* market sources built by
+# _make_market_fixture(). _purge() matches by LIKE pattern (not a fixed
+# name list) so a future rename can never silently re-leak — the Phase 10
+# audit found 28 leaked fixture shops caused exactly by name-blind purges.
+FIXTURE_SHOP_LIKE = ("PricingTestShop%", "GeoCtx%")
+FIXTURE_SOURCE_LIKE = ("TestSrc\\_%",)
 PW = "Test1234!"
 DOMAIN = "shelfsense.my"
 
@@ -52,23 +59,60 @@ def check(label, cond):
 
 
 def _purge():
+    """FK-safe removal of every row this suite created.
+
+    Fixture shops/sources are matched by name pattern so the randomized
+    GeoCtx_* / TestSrc_* fixtures are always covered, not just the fixed
+    TEST_SHOPS (Phase 10 audit fix).
+    """
     with app.app_context():
+        def _like_clause(patterns, prefix):
+            clause = " OR ".join(f"name LIKE :{prefix}{i}"
+                                  for i in range(len(patterns)))
+            return clause, {f"{prefix}{i}": p
+                            for i, p in enumerate(patterns)}
+
+        clause, params = _like_clause(FIXTURE_SHOP_LIKE, "s")
         rows = db.session.execute(
-            text("SELECT id FROM shop WHERE name IN :n"),
-            {"n": tuple(TEST_SHOPS)}).fetchall()
-        if not rows:
-            return
-        sids = ",".join(str(r[0]) for r in rows)
-        for tbl, col in [("inventory_adjustment","product_id"),("sale","product_id"),
-                          ("price_history","product_id"),("inventory","product_id"),
-                          ("product_market_match","shop_product_id")]:
+            text(f"SELECT id FROM shop WHERE {clause}"), params).fetchall()
+        if rows:
+            sids = ",".join(str(r[0]) for r in rows)
             db.session.execute(text(
-                f"DELETE FROM {tbl} WHERE {col} IN "
-                f"(SELECT id FROM product WHERE shop_id IN ({sids}))"))
-        db.session.execute(text(f"DELETE FROM product WHERE shop_id IN ({sids})"))
-        db.session.execute(text(f"DELETE FROM user WHERE shop_id IN ({sids})"))
-        db.session.execute(text("DELETE FROM shop WHERE name IN :n"),
-                           {"n": tuple(TEST_SHOPS)})
+                f"DELETE FROM pricing_recommendation_decision "
+                f"WHERE shop_id IN ({sids})"))
+            for tbl, col in [("inventory_adjustment","product_id"),("sale","product_id"),
+                              ("price_history","product_id"),("inventory","product_id"),
+                              ("product_market_match","shop_product_id")]:
+                db.session.execute(text(
+                    f"DELETE FROM {tbl} WHERE {col} IN "
+                    f"(SELECT id FROM product WHERE shop_id IN ({sids}))"))
+            db.session.execute(text(f"DELETE FROM product WHERE shop_id IN ({sids})"))
+            db.session.execute(text(
+                f"DELETE FROM notification WHERE user_id IN "
+                f"(SELECT id FROM user WHERE shop_id IN ({sids}))"))
+            db.session.execute(text(
+                f"DELETE FROM shop_invitation WHERE shop_id IN ({sids})"))
+            db.session.execute(text(f"DELETE FROM user WHERE shop_id IN ({sids})"))
+            db.session.execute(text(f"DELETE FROM shop WHERE id IN ({sids})"))
+
+        # Market fixtures: GeoCtx observations hang off TestSrc_* sources.
+        clause, params = _like_clause(FIXTURE_SOURCE_LIKE, "m")
+        mrows = db.session.execute(
+            text(f"SELECT id FROM market_source WHERE {clause}"),
+            params).fetchall()
+        if mrows:
+            mids = ",".join(str(r[0]) for r in mrows)
+            db.session.execute(text(
+                "DELETE pm FROM product_market_match pm "
+                "JOIN market_item mi ON mi.id = pm.market_item_id "
+                f"WHERE mi.source_id IN ({mids})"))
+            db.session.execute(text(
+                f"DELETE FROM market_price_observation WHERE market_item_id "
+                f"IN (SELECT id FROM market_item WHERE source_id IN ({mids}))"))
+            db.session.execute(text(
+                f"DELETE FROM market_item WHERE source_id IN ({mids})"))
+            db.session.execute(text(
+                f"DELETE FROM market_source WHERE id IN ({mids})"))
         db.session.commit()
 
 
@@ -366,6 +410,68 @@ def test_cost_floor_enforced():
     _purge()
 
 
+class _StubModel:
+    """Returns a fixed prediction so guardrail tests are hermetic.
+
+    The real RandomForest (ml/pricing_model.pkl) predicts whatever it
+    learned from KPDN data, so 'candidate below/above the floor' cannot
+    be arranged with real data — the trained model predicted RM77.45 for
+    a cost=100 product, silently flipping this test's premise.
+    """
+    def __init__(self, value):
+        self.value = value
+
+    def predict(self, X):
+        return [self.value]
+
+
+def test_sme_floor_hard_minimum():
+    """Phase 7.1 Fix 1: the SME target-margin protection is a HARD floor.
+
+    The ML candidate is stubbed so each case is deterministic:
+
+    Case A — candidate BELOW the target floor (cost=100, margin=25% ->
+      floor = 125.00): a candidate of 110.00 must be raised to exactly
+      125.00 and the payload must report the sme_margin guardrail.
+    Case B — candidate ABOVE the target floor: a candidate of 150.00 is
+      NOT pulled down and sme_margin must NOT fire.
+    """
+    import services.pricing_engine as pe
+    print("\n--- SME Floor Hard Minimum (Phase 7.1) ---")
+    _purge()
+    uid, sid, email = _make_shop(TEST_SHOPS[0])
+    pid_a = _make_product(sid, "SMEFloorA", cost=100.0, margin=25.0,
+                          selling=110.0, qty=1, unit="unit")
+    pid_b = _make_product(sid, "SMEFloorB", cost=100.0, margin=25.0,
+                          selling=150.0, qty=1, unit="unit")
+    real_cache = pe._MODEL_CACHE
+    try:
+        pe._MODEL_CACHE = {"model": _StubModel(0.0)}  # patched below per case
+        with app.app_context():
+            target_floor = round(100.0 * 1.25, 2)  # 125.00
+
+            pe._MODEL_CACHE = {"model": _StubModel(110.0)}
+            rec_a = get_price_recommendation(pid_a)
+            check("Case A: raised to exactly the target floor (125)",
+                  rec_a["recommended_price"] == target_floor)
+            check("Case A: sme_margin guardrail reported",
+                  "sme_margin" in rec_a["guardrails_applied"])
+            check("Case A: reasoning says target-margin floor (not blend)",
+                  any("target-margin floor" in r for r in rec_a["reasoning"]))
+            check("Case A: no blend wording in reasoning",
+                  not any("blend" in r.lower() for r in rec_a["reasoning"]))
+
+            pe._MODEL_CACHE = {"model": _StubModel(150.0)}
+            rec_b = get_price_recommendation(pid_b)
+            check("Case B: candidate above floor unchanged (150)",
+                  rec_b["recommended_price"] == 150.0)
+            check("Case B: sme_margin guardrail NOT fired",
+                  "sme_margin" not in rec_b["guardrails_applied"])
+    finally:
+        pe._MODEL_CACHE = real_cache
+    _purge()
+
+
 def test_no_market_data():
     """Test recommendation behavior when no market data exists.
 
@@ -387,13 +493,15 @@ def test_no_market_data():
 
 
 def test_sme_margin_clamp():
-    """Test the SME Margin Clamp guardrail (Rule 1b).
+    """Test the SME target-margin floor guardrail (Rule 1b).
 
     When the ML prediction is below the user's target floor
-    (cost * (1 + target_margin/100)), the system should blend
-    the ML prediction with the user floor to protect the SME.
+    (cost * (1 + target_margin/100)), the recommendation is raised to
+    that floor (hard minimum). Phase 7.1 Case B: when the candidate is
+    at/above the target floor, the existing hierarchy is unchanged and
+    the floor does NOT fire.
     """
-    print("\n--- SME Margin Clamp ---")
+    print("\n--- SME Target-Margin Floor ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
     # Cost=3.00, target_margin=30% -> user_floor = 3.90
@@ -410,12 +518,13 @@ def test_sme_margin_clamp():
 
 
 def test_sme_margin_clamp_triggers():
-    """Test that SME clamp fires when ML prediction is below target floor.
+    """Test that the SME target-margin floor fires when the ML prediction
+    is below the target floor.
 
     Uses a high margin (50%) so the user_floor is significantly above
-    the ML's default prediction, forcing the clamp to activate.
+    the ML's default prediction, forcing the floor to activate.
     """
-    print("\n--- SME Margin Clamp Triggers ---")
+    print("\n--- SME Target-Margin Floor Triggers ---")
     _purge()
     uid, sid, email = _make_shop(TEST_SHOPS[0])
     # Cost=10.00, margin=50% -> user_floor = 15.00
@@ -430,6 +539,141 @@ def test_sme_margin_clamp_triggers():
 
 
 # =============================== MAIN
+def _make_market_fixture(shop_state, shop_district, obs_state, obs_district,
+                         n_obs=4):
+    """Create a verified product + matched market item + observations.
+
+    Used by the Phase 7.1 shop-context test. The product's shop gets the
+    given state/district; the observations get their own state/district so
+    the geographic fallback (district -> state -> national) can be
+    exercised independently of the real PriceCatcher data.
+    """
+    from app import MarketSource, MarketItem, MarketPriceObservation, ProductMarketMatch
+    slug = ''.join(rnd.choices(string.ascii_lowercase, k=6))
+    uid, sid, email = _make_shop(f"GeoCtx_{slug}")
+    with app.app_context():
+        shop = db.session.get(Shop, sid)
+        shop.state, shop.district = shop_state, shop_district
+        pid = _make_product(sid, "GeoCtx", cost=10.0, margin=30.0,
+                            selling=13.0, qty=1, unit="kg")
+        src = MarketSource(name=f"TestSrc_{slug}", source_type="government",
+                           is_active=True)
+        db.session.add(src); db.session.flush()
+        item = MarketItem(source_id=src.id, raw_title=f"GeoCtx Item {slug}",
+                          normalized_title=f"geoctx item {slug}",
+                          package_quantity=1.0, package_unit="kg")
+        db.session.add(item); db.session.flush()
+        from datetime import datetime as _dt, timezone as _tz
+        base = _dt.now(_tz.utc)
+        for i in range(n_obs):
+            db.session.add(MarketPriceObservation(
+                market_item_id=item.id, premise_code=f"P{i}",
+                regular_price=12.0 + i, effective_price=12.0 + i,
+                normalized_unit_price=12.0 + i,
+                observed_at=base, state=obs_state, district=obs_district))
+        db.session.add(ProductMarketMatch(
+            shop_product_id=pid, market_item_id=item.id,
+            confidence_score=0.99, match_type="manual",
+            is_verified=True, is_rejected=False))
+        db.session.commit()
+        return uid, sid, email, pid
+
+
+def test_pricing_api_shop_context():
+    """Phase 7.1 Fix 2: /api/product/<pid>/pricing must use the SAME
+    geographic market context as the server-rendered recommendation.
+
+    Case A — district data satisfies the threshold: both the direct call
+      (as the server-rendered page does) and the API resolve tier='district'
+      with identical market stats and an identical recommended price.
+    Case B — no district data: both fall back consistently (district ->
+      state -> national) with identical payloads.
+    Case C — a user from another shop gets 403 (ownership check intact).
+    """
+    print("\n--- Pricing API shop context (Phase 7.1) ---")
+    _purge()
+    try:
+        _run_shop_context_cases()
+    finally:
+        _purge()
+
+
+def _run_shop_context_cases():
+    """Body of test_pricing_api_shop_context (split out so the fixture
+    teardown runs even if a case assertion fails mid-way)."""
+    # Case A: shop in Selangor/Hulu Langat; observations in that district.
+    _, sid_a, email_a, pid_a = _make_market_fixture(
+        "Selangor", "Hulu Langat", "Selangor", "Hulu Langat")
+    # Case B: shop in Perlis/Perlis; observations elsewhere -> fallback.
+    _, sid_b, email_b, pid_b = _make_market_fixture(
+        "Perlis", "Perlis", "Sabah", "Interior")
+    # Case C: an unrelated shop whose user must not read shop A's product.
+    _, sid_c, email_c = _make_shop(f"GeoCtxOther_{''.join(rnd.choices(string.ascii_lowercase, k=6))}")
+
+    with app.app_context():
+        shop_a = db.session.get(Shop, sid_a)
+        rec_server = get_price_recommendation(pid_a, shop=shop_a)
+
+    with app.test_client() as c:
+        tok = _login(c, email_a)
+        r = c.get(f"/api/product/{pid_a}/pricing")
+        check("Case A: API 200", r.status_code == 200)
+        api = r.get_json()
+        check("Case A: API tier == district", api["market_stats"]["market_tier"] == "district")
+        check("Case A: server-rendered tier == district",
+              rec_server["market_stats"]["market_tier"] == "district")
+        check("Case A: same tier API vs server",
+              api["market_stats"]["market_tier"] == rec_server["market_stats"]["market_tier"])
+        check("Case A: same median API vs server",
+              api["market_stats"]["median"] == rec_server["market_stats"]["median"])
+        check("Case A: same n API vs server",
+              api["market_stats"]["n"] == rec_server["market_stats"]["n"])
+        check("Case A: same recommended price",
+              api["recommended_price"] == rec_server["recommended_price"])
+        check("Case A: same evidence rating",
+              api["market_evidence"] == rec_server["market_evidence"])
+
+        _logout(c)
+        tok = _login(c, email_b)
+        r = c.get(f"/api/product/{pid_b}/pricing")
+        check("Case B: API 200", r.status_code == 200)
+        api_b = r.get_json()
+        check("Case B: no district match -> not district tier",
+              api_b["market_stats"]["market_tier"] != "district")
+        with app.app_context():
+            shop_b = db.session.get(Shop, sid_b)
+            rec_b = get_price_recommendation(pid_b, shop=shop_b)
+        check("Case B: fallback tier matches server-rendered call",
+              api_b["market_stats"]["market_tier"] == rec_b["market_stats"]["market_tier"])
+
+        _logout(c)
+        _login(c, email_c)
+        check("Case C: cross-shop pricing 403",
+              c.get(f"/api/product/{pid_a}/pricing").status_code == 403)
+    _purge()
+
+
+def _assert_no_leaks():
+    """Assert the suite left zero fixture rows behind (Phase 10 guard).
+
+    Called from main() after the run and from the pytest session fixture
+    in conftest.py, so the guarantee holds under BOTH runners.
+    """
+    with app.app_context():
+        clause = " OR ".join(f"name LIKE :p{i}" for i in
+                             range(len(FIXTURE_SHOP_LIKE)))
+        leaked = db.session.execute(
+            text(f"SELECT name FROM shop WHERE {clause}"),
+            {f"p{i}": p for i, p in enumerate(FIXTURE_SHOP_LIKE)}).fetchall()
+        mclause = " OR ".join(f"name LIKE :s{i}" for i in
+                              range(len(FIXTURE_SOURCE_LIKE)))
+        mleaked = db.session.execute(
+            text(f"SELECT name FROM market_source WHERE {mclause}"),
+            {f"s{i}": p for i, p in enumerate(FIXTURE_SOURCE_LIKE)}).fetchall()
+    assert not leaked, f"fixture shops leaked: {[r[0] for r in leaked]}"
+    assert not mleaked, f"fixture sources leaked: {[r[0] for r in mleaked]}"
+
+
 def main():
     global PASSED, FAILED
     PASSED = FAILED = 0
@@ -442,6 +686,7 @@ def main():
     test_pcapa()
     test_confidence()
     test_recommendation_basic()
+    test_sme_floor_hard_minimum()
     test_api_pricing()
     test_role_permissions()
     test_shop_isolation()
@@ -449,8 +694,11 @@ def main():
     test_no_market_data()
     test_sme_margin_clamp()
     test_sme_margin_clamp_triggers()
+    test_pricing_api_shop_context()
 
     _purge()
+    _assert_no_leaks()
+
     total = PASSED + FAILED
     print(f"\n{'=' * 60}")
     print(f"test_pricing_engine: {PASSED}/{total} passed" +

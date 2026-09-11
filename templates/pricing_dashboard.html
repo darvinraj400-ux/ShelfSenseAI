@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block title %}Pricing Intelligence - ShelfSense AI{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Pricing Intelligence
+    <small class="text-muted fs-6">— shop-wide overview</small>
+  </h2>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">Back</a>
+</div>
+
+{% if unassigned %}
+<div class="alert alert-info">
+  Your account is not linked to a shop yet. Accept an invitation from
+  <a href="{{ url_for('notifications') }}">Notifications</a> 🔔 to see pricing intelligence.
+</div>
+{% else %}
+
+{% set s = result.summary %}
+
+<!-- ===================== SUMMARY CARDS ===================== -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Total Products</div>
+      <h3 class="mb-0 text-primary">{{ s.total_products }}</h3>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Market-Covered</div>
+      <h3 class="mb-0 text-info">{{ s.market_covered }}</h3>
+      <small class="text-muted">verified market data</small>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Above Market</div>
+      <h3 class="mb-0 {% if s.above_market %}text-warning{% else %}text-success{% endif %}">{{ s.above_market }}</h3>
+      <small class="text-muted">&gt;5% over median</small>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Below Market</div>
+      <h3 class="mb-0 {% if s.below_market %}text-info{% else %}text-secondary{% endif %}">{{ s.below_market }}</h3>
+      <small class="text-muted">&gt;5% under median</small>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Pending Reviews</div>
+      <h3 class="mb-0 {% if s.pending %}text-warning{% else %}text-success{% endif %}">{{ s.pending }}</h3>
+      <small class="text-muted">recommendations to review</small>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card p-3 text-center">
+      <div class="text-muted small">Applied / Dismissed</div>
+      <h3 class="mb-0"><span class="text-success">{{ s.applied }}</span> /
+          <span class="text-secondary">{{ s.dismissed }}</span></h3>
+      <small class="text-muted">retailer decisions</small>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DECISION SUMMARY + CHARTS ===================== -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card p-4 h-100">
+      <h6 class="mb-3">Recommendation Status</h6>
+      {% set sc = s.status_counts %}
+      {% if sc %}
+        {% for label, cls in [('REDUCE', 'bg-warning text-dark'), ('INCREASE', 'bg-info text-dark'),
+                              ('MAINTAIN', 'bg-success'), ('INSUFFICIENT_DATA', 'bg-secondary')] %}
+          {% if sc.get(label) %}
+          <div class="d-flex justify-content-between mb-1">
+            <span><span class="badge {{ cls }}">{{ label|replace('_', ' ') }}</span></span>
+            <strong>{{ sc.get(label, 0) }}</strong>
+          </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <p class="text-muted small mb-0">No recommendations yet — add products with verified market links.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-4 h-100">
+      <h6 class="mb-3">Retailer Decisions
+        <small class="text-muted d-block">decision records (Phase 8) — not actual price changes</small>
+      </h6>
+      {% set dc = s.decision_counts %}
+      {% if dc %}
+        {% for label, cls in [('PENDING', 'bg-warning text-dark'), ('APPLIED', 'bg-success'),
+                              ('DISMISSED', 'bg-secondary')] %}
+          {% if dc.get(label) %}
+          <div class="d-flex justify-content-between mb-1">
+            <span><span class="badge {{ cls }}">{{ label }}</span></span>
+            <strong>{{ dc.get(label, 0) }} product{{ 's' if dc.get(label, 0) != 1 }}</strong>
+          </div>
+          {% endif %}
+        {% endfor %}
+        <hr class="my-2">
+        <small class="text-muted">
+          This month: {{ s.generated_this_month }} generated ·
+          {{ s.applied_this_month }} applied ·
+          {{ s.dismissed_this_month }} dismissed
+        </small>
+      {% else %}
+        <p class="text-muted small mb-0">No decision history yet. Open a product's Pricing Recommendation tab to review its recommendation — that review creates the first decision record.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-4 h-100">
+      <h6 class="mb-3">Market Position
+        <small class="text-muted d-block">current price vs market median (5% band)</small>
+      </h6>
+      {% set pc = s.position_counts %}
+      {% if pc %}
+        {% for label, cls in [('Above Market', 'bg-warning text-dark'), ('Below Market', 'bg-info text-dark'),
+                              ('Near Market', 'bg-success')] %}
+          {% if pc.get(label) %}
+          <div class="d-flex justify-content-between mb-1">
+            <span><span class="badge {{ cls }}">{{ label }}</span></span>
+            <strong>{{ pc.get(label, 0) }}</strong>
+          </div>
+          {% endif %}
+        {% endfor %}
+        {% if s.no_selling_price %}
+        <div class="d-flex justify-content-between mb-1">
+          <span><span class="badge bg-light text-dark border">No price set</span></span>
+          <strong>{{ s.no_selling_price }}</strong>
+        </div>
+        {% endif %}
+      {% else %}
+        <p class="text-muted small mb-0">No market comparison available — products need verified market links and a selling price.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- ===================== FILTERS ===================== -->
+<div class="card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label small text-muted mb-1">Search product</label>
+      <input type="text" class="form-control form-control-sm" name="search"
+             value="{{ filters.search or '' }}" placeholder="Product name…">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-muted mb-1">Status</label>
+      <select class="form-select form-select-sm" name="status">
+        <option value="">All</option>
+        {% for v in ['REDUCE', 'INCREASE', 'MAINTAIN', 'INSUFFICIENT_DATA'] %}
+        <option value="{{ v }}" {% if filters.status == v %}selected{% endif %}>{{ v|replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-muted mb-1">Decision</label>
+      <select class="form-select form-select-sm" name="decision">
+        <option value="">All</option>
+        {% for v in ['PENDING', 'APPLIED', 'DISMISSED'] %}
+        <option value="{{ v }}" {% if filters.decision == v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-muted mb-1">Evidence</label>
+      <select class="form-select form-select-sm" name="evidence">
+        <option value="">All</option>
+        {% for v in ['Strong', 'Moderate', 'Limited', 'Unavailable'] %}
+        <option value="{{ v }}" {% if filters.evidence == v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-muted mb-1">Market tier</label>
+      <select class="form-select form-select-sm" name="tier">
+        <option value="">All</option>
+        {% for v in ['district', 'state', 'national'] %}
+        <option value="{{ v }}" {% if filters.tier == v %}selected{% endif %}>{{ v|title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <button class="btn btn-primary btn-sm w-100" type="submit">Go</button>
+    </div>
+    <div class="col-12">
+      <label class="form-label small text-muted mb-1">Sort by</label>
+      <select class="form-select form-select-sm" name="sort" style="max-width:280px">
+        {% for v, label in [('priority', 'Highest priority'), ('above_market', 'Highest above market'),
+                            ('below_market', 'Lowest below market'), ('diff', 'Largest difference'),
+                            ('name', 'Product name'), ('pending_first', 'Pending first')] %}
+        <option value="{{ v }}" {% if filters.sort == v %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% if filters.search or filters.status or filters.decision or filters.evidence or filters.tier %}
+      <a href="{{ url_for('pricing_dashboard') }}" class="btn btn-link btn-sm">Clear filters</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<!-- ===================== OPPORTUNITY TABLE ===================== -->
+<div class="card p-4 mb-4">
+  <h5 class="mb-3">Pricing Opportunities
+    <small class="text-muted ms-2">{{ result.total }} product{{ 's' if result.total != 1 }}
+      (priority: engine status + market evidence — never changes a price)</small>
+  </h5>
+  {% if result.rows %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Product</th>
+          <th class="text-end">Current</th>
+          <th class="text-end">Recommended</th>
+          <th class="text-end">Diff</th>
+          <th class="text-end">Market Median</th>
+          <th>Tier</th>
+          <th>Evidence</th>
+          <th>Trend</th>
+          <th>Status</th>
+          <th>Decision</th>
+          <th>Priority</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in result.rows %}
+        <tr>
+          <td>
+            <a href="{{ url_for('product_detail', pid=r.product_id) }}"><strong>{{ r.name }}</strong></a>
+            {% if r.category %}<small class="text-muted d-block">{{ r.category }}</small>{% endif %}
+          </td>
+          <td class="text-end">{% if r.current_price is not none %}RM{{ "%.2f"|format(r.current_price) }}{% else %}—{% endif %}</td>
+          <td class="text-end"><strong>RM{{ "%.2f"|format(r.recommended_price) }}</strong></td>
+          <td class="text-end">
+            {% if r.diff is not none %}
+              {% if r.diff > 0.005 %}<span class="text-success">+RM{{ "%.2f"|format(r.diff) }}</span>
+              {% elif r.diff < -0.005 %}<span class="text-danger">−RM{{ "%.2f"|format(-r.diff) }}</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-end">{% if r.market_median %}RM{{ "%.2f"|format(r.market_median) }}{% else %}—{% endif %}</td>
+          <td>
+            {% if r.market_tier == 'district' %}<span class="badge bg-success">District</span>
+            {% elif r.market_tier == 'state' %}<span class="badge bg-info">State</span>
+            {% elif r.market_tier == 'national' %}<span class="badge bg-secondary">National</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if r.evidence == 'Strong' %}<span class="badge bg-success">Strong</span>
+            {% elif r.evidence == 'Moderate' %}<span class="badge bg-info">Moderate</span>
+            {% elif r.evidence == 'Limited' %}<span class="badge bg-warning text-dark">Limited</span>
+            {% else %}<span class="badge bg-secondary">Unavailable</span>{% endif %}
+          </td>
+          <td>
+            {% if r.trend %}
+              <span class="badge bg-light text-dark border">{{ r.trend }}{% if r.trend_percent is not none %} ({{ "%+.1f"|format(r.trend_percent) }}%){% endif %}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if r.status == 'REDUCE' %}<span class="badge bg-warning text-dark">REDUCE</span>
+            {% elif r.status == 'INCREASE' %}<span class="badge bg-info text-dark">INCREASE</span>
+            {% elif r.status == 'MAINTAIN' %}<span class="badge bg-success">MAINTAIN</span>
+            {% else %}<span class="badge bg-secondary">NO DATA</span>{% endif %}
+          </td>
+          <td>
+            {% if r.decision == 'APPLIED' %}<span class="badge bg-success">APPLIED</span>
+            {% elif r.decision == 'DISMISSED' %}<span class="badge bg-secondary" title="{{ r.decision_reason or '' }}">DISMISSED</span>
+            {% elif r.decision == 'PENDING' %}<span class="badge bg-warning text-dark">PENDING</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.priority == 'high' %}<span class="badge bg-danger">High</span>
+            {% elif r.priority == 'medium' %}<span class="badge bg-warning text-dark">Medium</span>
+            {% elif r.priority == 'low' %}<span class="badge bg-secondary">Low</span>
+            {% else %}<span class="badge bg-light text-dark border">None</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('product_detail', pid=r.product_id) }}">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if result.pages > 1 %}
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <a class="btn btn-outline-secondary btn-sm {{ 'disabled' if result.page <= 1 }}"
+       href="{{ url_for('pricing_dashboard', **dict(filters, page=result.page - 1)) if result.page > 1 else '#' }}">&laquo; Previous</a>
+    <small class="text-muted">Page {{ result.page }} of {{ result.pages }} ({{ result.total }} products)</small>
+    <a class="btn btn-outline-secondary btn-sm {{ 'disabled' if result.page >= result.pages }}"
+       href="{{ url_for('pricing_dashboard', **dict(filters, page=result.page + 1)) if result.page < result.pages else '#' }}">Next &raquo;</a>
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="text-center py-4">
+    {% if filters.search or filters.status or filters.decision or filters.evidence or filters.tier or filters.priority %}
+    <p class="text-muted mb-1">No products match the current filters.</p>
+    <a href="{{ url_for('pricing_dashboard') }}" class="btn btn-outline-secondary btn-sm">Clear filters</a>
+    {% elif s.total_products == 0 %}
+    <p class="text-muted mb-1">No products in your shop yet.</p>
+    <a href="{{ url_for('new_product') }}" class="btn btn-primary btn-sm">+ Add Product</a>
+    {% else %}
+    <p class="text-muted mb-0">No pricing opportunities match the current view.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<small class="text-muted d-block">
+  All figures are deterministic outputs of the existing pricing engine (Phase 6 market intelligence,
+  Phase 7 recommendation + status, Phase 8 decision records). "Status" is the system's suggestion;
+  "Decision" is the retailer's recorded choice; applying or dismissing a recommendation happens on the
+  product page, which remains the authoritative workflow. No price is ever changed by this dashboard.
+</small>
+{% endif %}
+{% endblock %}

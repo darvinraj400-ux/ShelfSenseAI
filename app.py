@@ -313,6 +313,76 @@ class PriceHistory(db.Model):
 
 
 # -------------------------------------------------
+# Phase 8 — Pricing Recommendation Decision Record
+# A persistent snapshot of ONE recommendation the system showed a
+# retailer, plus that retailer's explicit decision about it.
+#
+# Two distinct audit concepts (deliberately NOT merged):
+#   * PriceHistory answers:  "what happened to the ACTUAL selling price?"
+#   * This table answers:    "what did the system RECOMMEND and what did
+#                             the retailer DECIDE, with what market context?"
+#
+# decision is a workflow state: PENDING (recorded, awaiting the retailer)
+#   -> APPLIED (price changed via the pricing engine + PriceHistory row)
+#   -> or DISMISSED (retailer declined, reason recorded).
+# recommendation_status is the Phase 7 ENGINE status (MAINTAIN / REDUCE /
+# INCREASE / INSUFFICIENT_DATA) — it describes the recommendation, never
+# the retailer's action. The snapshot columns (market median, evidence,
+# trend, ...) freeze what the retailer SAW at decision time so the record
+# stays understandable even after the market moves on.
+# -------------------------------------------------
+class PricingRecommendationDecision(db.Model):
+    """One recommendation shown to the retailer + the decision made about it.
+
+    Lifecycle: the product page records a PENDING decision snapshot when an
+    owner/manager opens the pricing pane (reusing an identical pending
+    snapshot instead of piling up rows). The retailer then either APPLIES
+    it (atomic: price update + PriceHistory + decision row) or DISMISSES
+    it with a reason. All snapshot fields are written once at record time
+    and never recalculated — historical auditability is the point."""
+    __tablename__ = 'pricing_recommendation_decision'
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'),
+                           nullable=False, index=True)
+    #   - which shop product this recommendation was about.
+    shop_id = db.Column(db.Integer, db.ForeignKey('shop.id'),
+                        nullable=False, index=True)
+    #   - denormalized from product.shop_id so cross-shop authorization is
+    #     a single indexed comparison on the decision row itself.
+    # --- recommendation snapshot (what the retailer SAW) ---
+    recommended_price = db.Column(db.Float, nullable=False)
+    #   - the FINAL guardrailed price from the deterministic engine.
+    current_price = db.Column(db.Float, nullable=True)
+    #   - the product's selling price AT GENERATION TIME (NULL if unset).
+    #     Apply-time staleness checks compare this against the live price.
+    recommendation_status = db.Column(db.String(20), nullable=False)
+    #   - Phase 7 engine status: MAINTAIN | REDUCE | INCREASE |
+    #     INSUFFICIENT_DATA. Describes the recommendation only.
+    market_evidence = db.Column(db.String(20), nullable=True)
+    market_tier = db.Column(db.String(20), nullable=True)
+    market_median = db.Column(db.Float, nullable=True)
+    trend_classification = db.Column(db.String(20), nullable=True)
+    trend_percent = db.Column(db.Float, nullable=True)
+    guardrails_applied = db.Column(db.String(255), nullable=True)
+    #   - comma-joined guardrail keys that fired (e.g. 'sme_margin'), so an
+    #     old record explains why the recommended price was what it was.
+    generated_at = db.Column(db.DateTime, nullable=False,
+                             default=lambda: datetime.now(timezone.utc))
+    # --- retailer decision (what the retailer DID) ---
+    decision = db.Column(db.String(20), nullable=False, default='PENDING')
+    #   - PENDING | APPLIED | DISMISSED.
+    decision_reason = db.Column(db.String(255), nullable=True)
+    #   - dismissal reason (+ optional short note). NULL for PENDING/APPLIED.
+    decided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    decided_at = db.Column(db.DateTime, nullable=True)
+    #   - who acted and when; both set together on apply/dismiss.
+    product = db.relationship('Product', backref='recommendation_decisions')
+    decider = db.relationship('User')
+    #   - decider: the user who applied/dismissed (None while PENDING).
+# -------------------------------------------------
+
+
+# -------------------------------------------------
 # Sales - one row per completed sale (a quantity of ONE product sold at
 # a particular per-unit price and time).
 # -------------------------------------------------
@@ -523,11 +593,24 @@ class MarketPriceObservation(db.Model):
     normalized_unit_price is the price per BASE unit (RM/kg, RM/L, RM/unit)
     computed with utils.normalization.calculate_unit_price. This is the
     number that makes fair comparisons across differently-sized packages
-    possible (e.g. a 500g packet vs a 10kg bag)."""
+    possible (e.g. a 500g packet vs a 10kg bag).
+
+    premise_code (Phase 6): the reporting store's stable identifier
+    (lookup_premise.premise_code) for premise-level sources such as
+    PriceCatcher — one raw price record becomes ONE observation, so the
+    market analysis can show the cheapest store, per-store spread, and
+    premise counts. NULL for sources without a premise concept
+    (ManaMurah/FAMA aggregates, manual entry). Premise METADATA (name,
+    address, type, state, district) is deliberately NOT duplicated here:
+    it resolves through the raw `lookup_premise` archive table, keeping
+    this multi-million-row table lean."""
     __tablename__ = 'market_price_observation'
     id = db.Column(db.Integer, primary_key=True)
     market_item_id = db.Column(db.Integer, db.ForeignKey('market_item.id'),
                                nullable=False)
+    premise_code = db.Column(db.String(20), nullable=True)
+    #   - stable premise identifier for premise-level sources; NULL when
+    #     the source reports aggregates rather than per-store prices.
     regular_price = db.Column(db.Numeric(10, 2), nullable=False)   # RM
     promo_price = db.Column(db.Numeric(10, 2), nullable=True)      # RM (NULL = no promo)
     is_on_promo = db.Column(db.Boolean, nullable=False, default=False)
@@ -542,6 +625,10 @@ class MarketPriceObservation(db.Model):
     observed_at = db.Column(db.DateTime,
                             default=lambda: datetime.now(timezone.utc),
                             index=True)
+    #   - DB-level idempotency: (market_item_id, premise_code, observed_at)
+    #     is unique for premise-level sources (uq_market_obs_premise in
+    #     migration e5d4c3b2a1f0), so a repeated ETL run can never create
+    #     duplicate observations.
 
     def __init__(self, **kw):
         # Derive effective_price: promo wins when the item is on promo.
@@ -607,7 +694,14 @@ from services.matching import apply_suggestions        # noqa: E402
 from services.market_analysis import get_market_stats   # noqa: E402
 from services.pricing_engine import (get_price_recommendation,  # noqa: E402
                                      apply_price as _apply_price)
+from services.pricing_workflow import (record_decision,           # noqa: E402
+                                       apply_decision, dismiss_decision,
+                                       get_pending_decision,
+                                       get_recent_decisions,
+                                       DISMISS_REASONS)
 from services.dashboard_service import get_dashboard_metrics  # noqa: E402
+from services.pricing_dashboard import (get_shop_pricing_opportunities,  # noqa: E402
+                                        get_shop_pricing_summary)
 
 
 
@@ -937,6 +1031,42 @@ def dashboard():
                            metrics=metrics)
 
 
+@app.route('/pricing-dashboard')
+@login_required
+@role_required('owner', 'manager')  # management pricing intelligence: staff excluded
+def pricing_dashboard():
+    """Phase 9: shop-wide pricing intelligence dashboard.
+
+    A pure READ view over the existing per-product intelligence: summary
+    cards, a pricing opportunity table (filters + sorting + pagination),
+    lightweight distribution charts, and Phase 8 decision statistics.
+    GET only — no price changes, no decision records created here; the
+    Phase 8 product-page workflow remains the single mutation path.
+    """
+    if current_user.shop_id is None:
+        return render_template('pricing_dashboard.html', result=None,
+                               filters={}, unassigned=True)
+    filters = {
+        'status': request.args.get('status') or None,
+        'decision': request.args.get('decision') or None,
+        'evidence': request.args.get('evidence') or None,
+        'tier': request.args.get('tier') or None,
+        'priority': request.args.get('priority') or None,
+        'search': (request.args.get('search') or '').strip() or None,
+        'sort': request.args.get('sort') or 'priority',
+        'page': request.args.get('page', 1, type=int),
+    }
+    shop = db.session.get(Shop, current_user.shop_id)
+    result = get_shop_pricing_opportunities(
+        shop, page=filters['page'], per_page=20,
+        status_filter=filters['status'], decision_filter=filters['decision'],
+        evidence_filter=filters['evidence'], tier_filter=filters['tier'],
+        priority_filter=filters['priority'], search=filters['search'],
+        sort=filters['sort'])
+    return render_template('pricing_dashboard.html', result=result,
+                           filters=filters, unassigned=False)
+
+
 @app.route('/product/new', methods=['GET', 'POST'])
 @login_required
 @role_required('owner', 'manager')  # staff may NOT add products
@@ -1248,10 +1378,29 @@ def product_detail(pid):
     verified, suggested = _market_state(p, p.shop)
     stats = get_market_stats(p.id, p.shop)
     pricing = get_price_recommendation(p.id, shop=p.shop)
+    # Phase 6F: historical market trend for the verified matches
+    # (server-side aggregation; bounded to the last 90 days).
+    from services.market_analysis import get_market_trend
+    trend = get_market_trend(
+        [m.market_item_id for m in p.market_matches if m.is_verified],
+        shop=p.shop)
+    # Phase 8: recommendation decision workflow. The pending decision
+    # (if any) is created lazily ONLY for owner/manager — the roles that
+    # can act on it — so a staff page view never writes audit rows.
+    pending_decision = None
+    recent_decisions = []
+    if current_user.can('owner', 'manager'):
+        pending_decision, _ = record_decision(p.id, shop=p.shop,
+                                              user_id=current_user.id)
+        recent_decisions = get_recent_decisions(p.id, limit=10)
     return render_template('product_detail.html', product=p, inventory=inv,
                            history=history, verified=verified,
                            suggested=suggested, stats=stats,
+                           trend=trend, shop=p.shop,
                            pricing=pricing,
+                           pending_decision=pending_decision,
+                           recent_decisions=recent_decisions,
+                           dismiss_reasons=DISMISS_REASONS,
                            can_edit=current_user.can('owner', 'manager'))
 
 
@@ -1331,11 +1480,16 @@ def api_match_remove(mid):
 @app.route('/api/product/<int:pid>/pricing', methods=['GET'])
 @login_required
 def api_pricing(pid):
-    """ML-powered price recommendation with guardrails."""
+    """ML-powered price recommendation with guardrails.
+
+    Phase 7.1: passes the authenticated user's shop so the API resolves
+    the SAME geographic market tier (district -> state -> national) as
+    the server-rendered product detail page. Ownership is still enforced:
+    a user can only ever price their own shop's products."""
     p = Product.query.get_or_404(pid)
     if p.shop_id != current_user.shop_id:
         abort(403)
-    return jsonify(get_price_recommendation(pid))
+    return jsonify(get_price_recommendation(pid, shop=p.shop))
 
 
 @app.route('/api/product/<int:pid>/apply-price', methods=['POST'])
@@ -1348,6 +1502,76 @@ def api_apply_price(pid):
         abort(403)
     new_price, msg = _apply_price(pid, current_user.id)
     return jsonify({'new_price': new_price, 'message': msg})
+
+
+# -------------------------------------------------
+# PHASE 8 — RECOMMENDATION DECISION WORKFLOW API
+# Explicit POST actions only; the read-only pricing GET above never
+# changes state. Every action re-checks auth + shop ownership + role,
+# validates server-side, and records the decision for auditability.
+# -------------------------------------------------
+@app.route('/api/product/<int:pid>/decision', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_record_decision(pid):
+    """Snapshot the current recommendation as a PENDING decision record.
+    Called by the pricing pane when an owner/manager reviews it."""
+    p = Product.query.get_or_404(pid)
+    if p.shop_id != current_user.shop_id:
+        abort(403)
+    decision, created = record_decision(pid, shop=p.shop,
+                                        user_id=current_user.id)
+    return jsonify({
+        'decision_id': decision.id,
+        'created': created,
+        'decision': decision.decision,
+        'recommended_price': decision.recommended_price,
+        'current_price': decision.current_price,
+        'recommendation_status': decision.recommendation_status,
+    })
+
+
+@app.route('/api/decision/<int:did>/apply', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_apply_decision(did):
+    """Apply a PENDING recommendation atomically.
+
+    The price is NEVER taken from the client: the server recomputes the
+    recommendation with the deterministic engine and applies that value.
+    Stale recommendations (product price changed since the snapshot) are
+    rejected, not applied."""
+    d = PricingRecommendationDecision.query.get_or_404(did)
+    if d.shop_id != current_user.shop_id:
+        abort(403)
+    product = Product.query.get_or_404(d.product_id)
+    if product.shop_id != current_user.shop_id:
+        abort(403)
+    status, msg = apply_decision(did, current_user.id, shop=product.shop)
+    code = {'applied': 200, 'already_applied': 200,
+            'stale': 409, 'invalid': 400}[status]
+    resp = {'status': status, 'message': msg}
+    if status == 'applied':
+        resp['new_price'] = float(Product.query.get(d.product_id).selling_price)
+    return jsonify(resp), code
+
+
+@app.route('/api/decision/<int:did>/dismiss', methods=['POST'])
+@login_required
+@role_required('owner', 'manager')
+def api_dismiss_decision(did):
+    """Dismiss a PENDING recommendation with a validated reason.
+    Server-side reason validation — the client's JS is never trusted."""
+    d = PricingRecommendationDecision.query.get_or_404(did)
+    if d.shop_id != current_user.shop_id:
+        abort(403)
+    data = request.get_json(silent=True) or request.form or {}
+    status, msg = dismiss_decision(
+        did, current_user.id,
+        reason=(data.get('reason') or '').strip(),
+        note=(data.get('note') or '').strip())
+    code = {'dismissed': 200, 'already_decided': 200, 'invalid': 400}[status]
+    return jsonify({'status': status, 'message': msg}), code
 
 
 # -------------------------------------------------

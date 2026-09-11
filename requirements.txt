@@ -32,3 +32,6 @@ joblib==1.5.3
 
 # --- LLM explanations (Phase 3F: services/llm_explainer.py) ---
 google-genai==2.19.0
+
+# --- ManaMurah MCP market-data sync (Phase 5: services/mcp_client.py) ---
+mcp==1.19.0
