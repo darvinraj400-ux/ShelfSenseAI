@@ -874,46 +874,4 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
     }
 
 
-# -------------------------------------------------
-# APPLY RECOMMENDED PRICE
-# -------------------------------------------------
 
-def apply_price(product_id, user_id):
-    """Apply the recommended price to a product and log the audit trail.
-
-    This function is called when the shop owner clicks "Apply" on the
-    Pricing Recommendation tab. It:
-      1. Calls get_price_recommendation() to get the guarded price.
-      2. Updates the product's selling_price.
-      3. Creates a PriceHistory entry for the audit trail.
-      4. Commits both changes as one transaction.
-
-    Args:
-        product_id: The integer ID of the product.
-        user_id: The integer ID of the user applying the price (audit).
-
-    Returns:
-        A tuple (applied_price, flash_message).
-    """
-    # Load the product and get the full recommendation.
-    product = Product.query.get_or_404(product_id)
-    rec = get_price_recommendation(product_id)
-    new_price = rec["recommended_price"]
-
-    # Update the selling price (this is what customers see).
-    old_price = product.selling_price
-    product.selling_price = new_price
-
-    # Log the change in PriceHistory for the audit trail.
-    # This allows the PCAPA baseline comparison to track price evolution.
-    db.session.add(PriceHistory(
-        product_id=product.id,
-        cost_price=product.cost_price,
-        selling_price=new_price,
-        target_margin=product.target_margin,
-    ))
-
-    # Commit both the price update and the history entry atomically.
-    db.session.commit()
-
-    return new_price, f"Price updated to RM{new_price:.2f} (AI recommendation applied)"

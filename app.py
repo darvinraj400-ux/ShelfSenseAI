@@ -692,8 +692,7 @@ class ProductMarketMatch(db.Model):
 # safely.
 from services.matching import apply_suggestions        # noqa: E402
 from services.market_analysis import get_market_stats   # noqa: E402
-from services.pricing_engine import (get_price_recommendation,  # noqa: E402
-                                     apply_price as _apply_price)
+from services.pricing_engine import get_price_recommendation  # noqa: E402
 from services.pricing_workflow import (record_decision,           # noqa: E402
                                        apply_decision, dismiss_decision,
                                        get_pending_decision,
@@ -1490,18 +1489,6 @@ def api_pricing(pid):
     if p.shop_id != current_user.shop_id:
         abort(403)
     return jsonify(get_price_recommendation(pid, shop=p.shop))
-
-
-@app.route('/api/product/<int:pid>/apply-price', methods=['POST'])
-@login_required
-@role_required('owner', 'manager')
-def api_apply_price(pid):
-    """Apply the recommended price to the product's selling_price."""
-    p = Product.query.get_or_404(pid)
-    if p.shop_id != current_user.shop_id:
-        abort(403)
-    new_price, msg = _apply_price(pid, current_user.id)
-    return jsonify({'new_price': new_price, 'message': msg})
 
 
 # -------------------------------------------------

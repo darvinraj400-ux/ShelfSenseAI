@@ -14,7 +14,9 @@ ShelfSenseAI utilizes standard server-side rendering for its core views, supplem
 | `GET` | `/api/product/<pid>/market` | Fetches verified market items linked to a product. |
 | `GET` | `/api/product/<pid>/market-stats` | Calculates statistical market summaries (PPI, median) with geographic filtering and recent competitor observations. |
 | `GET` | `/api/product/<pid>/pricing` | Runs the ML model + Gemini LLM explainer and returns the JSON payload. |
-| `POST` | `/api/product/<pid>/apply-price` | Applies the AI-recommended price and logs the audit trail. |
+| `POST` | `/api/product/<pid>/decision` | Snapshots the current recommendation as a PENDING decision for audit. |
+| `POST` | `/api/decision/<did>/apply` | Applies a PENDING recommendation atomically (stale check + server-side recomputation + PriceHistory + APPLIED). |
+| `POST` | `/api/decision/<did>/dismiss` | Dismisses a PENDING recommendation with a validated reason. |
 
 ### Geographic Localization
 

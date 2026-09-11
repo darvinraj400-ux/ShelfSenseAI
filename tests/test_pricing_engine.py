@@ -14,11 +14,14 @@ Part 1 — Pure function tests (no database required):
 Part 2 — Database + API integration tests:
   - Full recommendation pipeline (get_price_recommendation)
   - Pricing API endpoint (GET /api/product/<pid>/pricing)
-  - Apply price endpoint (POST /api/product/<pid>/apply-price)
-  - Role-based access control (owner/manager/staff permissions)
-  - Shop isolation (cross-shop access blocked)
+  - Role-based access control for pricing read (owner/manager/staff)
+  - Shop isolation for pricing read (cross-shop access blocked)
   - Cost floor enforcement in real recommendations
   - No-market-data fallback behavior
+  # Note: pricing mutations are now exclusively via the Phase 8 workflow
+  # (POST /api/decision/<did>/apply) — see tests/test_pricing_workflow.py
+  # for owner/manager apply, staff 403, stale 409, atomic commit,
+  # PriceHistory + PricingRecommendationDecision coverage.
 
 Each test creates its own shop/product fixtures and cleans them up
 in the finally block, ensuring the database is restored to its
@@ -289,12 +292,12 @@ def test_recommendation_basic():
 
 
 def test_api_pricing():
-    """Test the pricing API endpoints via HTTP requests.
+    """Test the pricing read endpoint via HTTP (Phase 7/7.1).
 
     Verifies:
     - GET /api/product/<pid>/pricing returns 200 with recommended_price.
-    - POST /api/product/<pid>/apply-price updates selling_price.
-    - PriceHistory entry is created for the audit trail.
+    # Mutation is now via the Phase 8 decision workflow
+    # (POST /api/decision/<did>/apply) — covered in test_pricing_workflow.py.
     """
     print("\n--- API ---")
     _purge()
@@ -302,37 +305,26 @@ def test_api_pricing():
     pid = _make_product(sid, "API", cost=10.0, margin=30.0, selling=13.0)
 
     with app.test_client() as c:
-        tok = _login(c, email)
+        _login(c, email)
         r = c.get(f"/api/product/{pid}/pricing")
         check("GET /pricing 200", r.status_code == 200)
         data = r.get_json()
         check("GET /pricing has recommended_price",
               data is not None and "recommended_price" in data)
 
-        r = c.post(f"/api/product/{pid}/apply-price",
-                   headers={"X-CSRFToken": tok})
-        check("POST /apply-price 200", r.status_code == 200)
-        data = r.get_json()
-        check("POST /apply-price has new_price",
-              data is not None and "new_price" in data)
-
     with app.app_context():
-        p = db.session.get(Product, pid)
-        if data:
-            check("Selling price updated",
-                  float(p.selling_price) == float(data["new_price"]))
         hist = PriceHistory.query.filter_by(product_id=pid).count()
-        check("PriceHistory entries >= 2", hist >= 2)
+        check("PriceHistory entries >= 1 (initial)", hist >= 1)
     _purge()
 
 
 def test_role_permissions():
-    """Test RBAC enforcement on pricing endpoints.
+    """Test RBAC enforcement on the pricing READ endpoint.
 
     Verifies:
-    - Owner can GET /pricing and POST /apply-price.
-    - Manager can GET /pricing and POST /apply-price.
-    - Staff can GET /pricing but gets 403 on POST /apply-price.
+    - Owner, manager, and staff can all GET /pricing (read is allowed).
+    # Apply-permission (owner/manager 200, staff 403, stale, audit) is
+    # covered via the Phase 8 workflow in tests/test_pricing_workflow.py.
     """
     print("\n--- Roles ---")
     _purge()
@@ -344,36 +336,29 @@ def test_role_permissions():
     _, se = _make_user(sid, "staff", slug2)
 
     with app.test_client() as c:
-        tok = _login(c, email)
+        _login(c, email)
         check("Owner GET /pricing 200",
               c.get(f"/api/product/{pid}/pricing").status_code == 200)
-        check("Owner POST /apply-price 200",
-              c.post(f"/api/product/{pid}/apply-price",
-                     headers={"X-CSRFToken": tok}).status_code == 200)
 
         _logout(c)
-        tok = _login(c, me)
+        _login(c, me)
         check("Manager GET /pricing 200",
               c.get(f"/api/product/{pid}/pricing").status_code == 200)
-        check("Manager POST /apply-price 200",
-              c.post(f"/api/product/{pid}/apply-price",
-                     headers={"X-CSRFToken": tok}).status_code == 200)
 
         _logout(c)
-        tok = _login(c, se)
+        _login(c, se)
         check("Staff GET /pricing 200",
               c.get(f"/api/product/{pid}/pricing").status_code == 200)
-        check("Staff POST /apply-price 403",
-              c.post(f"/api/product/{pid}/apply-price",
-                     headers={"X-CSRFToken": tok}).status_code == 403)
     _purge()
 
 
 def test_shop_isolation():
-    """Test that cross-shop access is blocked on pricing endpoints.
+    """Test that cross-shop pricing READ is blocked.
 
-    Verifies that a user from Shop B cannot access pricing data
-    or apply prices to products belonging to Shop A.
+    Verifies that a user from Shop B cannot read pricing data
+    for products belonging to Shop A.
+    # Cross-shop APPLY is covered in tests/test_pricing_workflow.py
+    # (decision apply with wrong shop → 403).
     """
     print("\n--- Isolation ---")
     _purge()
@@ -382,12 +367,9 @@ def test_shop_isolation():
     pid_a = _make_product(sid_a, "IsoA", cost=10.0, margin=30.0, selling=13.0)
 
     with app.test_client() as c:
-        tok = _login(c, eb)
+        _login(c, eb)
         check("Cross-shop GET /pricing 403",
               c.get(f"/api/product/{pid_a}/pricing").status_code == 403)
-        check("Cross-shop POST /apply-price 403",
-              c.post(f"/api/product/{pid_a}/apply-price",
-                     headers={"X-CSRFToken": tok}).status_code == 403)
     _purge()
 
 
