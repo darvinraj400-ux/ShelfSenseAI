@@ -27,6 +27,11 @@ FIXTURE_PURGE_MODULES = [
     "test_integration",
     "test_market_models",
     "test_market_ingestion",
+    "test_market_refresh_service",
+    "test_market_refresh_status",
+    "test_market_refresh_health",
+    "test_market_data_monitoring",
+    "test_market_freshness",
 ]
 
 
@@ -56,3 +61,30 @@ def _session_leak_guard():
     yield
     import test_pricing_engine  # noqa: F401  (always importable: same dir)
     test_pricing_engine._assert_no_leaks()
+    # Phase 10: ensure no ephemeral refresh runs leaked (manamurah/pricecatcher
+    # runs created by mocked tests are cleaned; real demo history is empty at
+    # this stage, so any remaining row is a leak).
+    from app import app
+    from sqlalchemy import text
+    with app.app_context():
+        from app import db
+        # Clean any leftover test runs that escaped per-test purges (last test)
+        # Includes manual/scheduled/test runs created by refresh service tests in the last 2h
+        try:
+            db.session.execute(text(
+                "DELETE FROM market_refresh_run WHERE source_name LIKE 'test%'"
+            ))
+            db.session.execute(text(
+                "DELETE FROM market_refresh_run WHERE triggered_by IN ('test','scheduled')"
+            ))
+            db.session.execute(text(
+                "DELETE FROM market_refresh_run WHERE source_name IN ('manamurah','pricecatcher') AND started_at > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR)"
+            ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        # Verify no TestRefresh* shops/sources remain
+        leaked = db.session.execute(text(
+            "SELECT name FROM shop WHERE name LIKE 'TestRefresh%'"
+        )).fetchall()
+        assert not leaked, f"refresh shops leaked: {[r[0] for r in leaked]}"

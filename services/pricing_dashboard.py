@@ -166,6 +166,10 @@ def get_shop_pricing_opportunities(shop, page=1, per_page=20,
                 if (recommended is not None and current is not None) else None)
         prio = _priority(status, evidence)
         d = decisions.get(p.id)
+        # Phase 10F freshness (read-only qualification, from market_analysis)
+        freshness = rec.get("market_freshness") or m.get("market_freshness") or "unavailable"
+        freshness_label = rec.get("freshness_label") or m.get("freshness_label") or "Unavailable"
+        freshness_warning = rec.get("freshness_warning") or m.get("freshness_warning")
         rows.append({
             "product_id": p.id,
             "name": p.name,
@@ -186,6 +190,10 @@ def get_shop_pricing_opportunities(shop, page=1, per_page=20,
             "decision": (d.decision if d else None),
             "decision_reason": (d.decision_reason if d else None),
             "decision_at": (d.decided_at if d else None),
+            # Phase 10F
+            "freshness": freshness,
+            "freshness_label": freshness_label,
+            "freshness_warning": freshness_warning,
         })
 
     # ---- filtering (server-side, post-engine) ----

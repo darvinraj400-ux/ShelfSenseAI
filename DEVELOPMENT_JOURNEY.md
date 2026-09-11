@@ -14,7 +14,7 @@ entries to "Recent Updates" and update the "Last Updated" timestamp.
 **Type:** Final Year Project (FYP)
 **Team:** 3 Members (Backend, Database, Frontend)
 **Repository:** [github.com/darvinraj400-ux/ShelfSenseAI](https://github.com/darvinraj400-ux/ShelfSenseAI)
-**Last Updated:** 2026-09-09
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -711,3 +711,59 @@ Malaysian **Barangan Kawalan** (Price-Controlled Goods) implementation:
 - **Phase 2B:** Sales, Inventory, InventoryAdjustment with atomic transactions.
 - **Phase 2C:** Employee invitation system, in-app notifications, shop membership.
 - **Commits:** `23adf9d` through `e676040`
+
+
+### 2026-09-10 — Phase 10A: Unified Market-Data Refresh Service
+
+- **Objective:** one programmatic entry point for refreshing both market sources without duplicating ingestion logic.
+- **Implementation:** `services/market_refresh_service.py` — `MarketDataRefreshService` / `MarketRefreshResult` (source, success, inserted/updated/duplicates/rejected/errors, latest_observed_at). PriceCatcher reuses `import_pricecatcher` archive + `etl_pricecatcher` premise-level ETL (stable `MarketItem` ids, source-isolated `WHERE source_id=:sid`, unique `uq_market_obs_premise`); ManaMurah reuses `mcp_client` streamable HTTP + `market_ingestion` source-agnostic upsert (FAMA_SCOPE_ITEMS dry-goods, per-item commit/rollback). Dry-run supported (PriceCatcher ETL skipped, ManaMurah validation only).
+- **Architecture:** CLI → Service → PriceCatcher/ManaMurah → MarketRefreshRun → Health → Observations → Intelligence → Recommendation → Human.
+- **CLI:** `flask market-data refresh --source pricecatcher|manamurah|all [--dry-run] [--days 30] [--state johor]` (added to `app.py` via `@app.cli.group`).
+- **Testing:** `tests/test_market_refresh_service.py` (12 tests, mocked MCP, idempotency, source isolation, no price mutation). Full suite 197 passed.
+- **Safety:** no pricing guardrail change, no automatic repricing, no MarketPriceObservation duplication.
+
+### 2026-09-10 — Phase 10B: Persistent Refresh Audit
+
+- **MarketRefreshRun** model in `app.py` + migration `33b959a98288_add_market_refresh_run.py` (revises `f9e8d7c6b5a4`, index `source_name,started_at`). Fields: `source_name, started_at, finished_at, status success/partial/failed, inserted/updated/duplicates_skipped/rejected/errors, latest_observed_at, error_message (sanitized), triggered_by manual/scheduled/test`.
+- **Service integration:** `MarketDataRefreshService` now creates a `MarketRefreshRun` per source invocation (dry_run skipped, failures still persisted with `finished_at` and sanitized error, per-source isolation for `source=all` partial failures).
+- **Status helpers:** `services/market_refresh_status.py` — `latest_run`, `latest_successful_run`, `recent_runs`, `latest_observation_date` (read-only).
+- **Testing:** `tests/test_market_refresh_status.py` (7 tests, model/migration, success/failed/partial, idempotent history, status helpers, no mutation). Full suite 204 passed. No 1.97M table modification.
+
+### 2026-09-10 — Phase 10C: Market Refresh Health
+
+- **Health service:** `services/market_refresh_health.py` — `get_refresh_health(source)` (read-only, source-isolated, indexed `MAX(observed_at)`), thresholds `ManaMurah fresh ≤3d/aging ≤7d`, `PriceCatcher fresh ≤35d/aging ≤60d`, levels `healthy/warning/unhealthy` from refresh status + observation availability + freshness + error/rejection metrics. CLI `flask market-data health --source all`.
+- **Testing:** `tests/test_market_refresh_health.py` (7 tests, mocked data, isolation, read-only). Full suite 216 passed.
+
+### 2026-09-11 — Phase 10D: Market Data Monitoring UI
+
+- **Route:** `GET /market-data` (`@login_required @role_required('owner','manager')`, Staff 403, unauth redirect) — uses `market_refresh_status` + `market_refresh_health` (no pricing logic in Jinja, 30-row limit).
+- **Template:** `templates/market_data.html` (Base + Bootstrap) — Section 1 source overview cards (per active source from DB, health badge, latest refresh status/finished, latest successful, latest observation, metrics), Section 2 health details (fresh/aging/stale, partial/failed, sanitized error), Section 3 recent history table (Date/Time, Source, Status, Inserted, Updated, Duplicates, Rejected, Errors, Latest Observation, Triggered By), empty states for never-refreshed/no observations/failed/partial/inactive. Read-only, never triggers refresh or creates decisions.
+- **Navigation:** `templates/base.html` — `Market Data` link for Owner/Manager only.
+- **Testing:** `tests/test_market_data_monitoring.py` (12 tests, Owner/Manager 200, Staff 403, source overview, healthy/warning/unhealthy, never-refreshed, history limit, read-only, isolation). Full suite 228 passed.
+
+### 2026-09-11 — Phase 10E: Market Data Scheduling
+
+- **OS scheduling:** no Celery/Redis/APScheduler. `--scheduled` flag on `flask market-data refresh` sets `triggered_by=scheduled` (vs `manual`/`test`) for audit; external scheduler (Windows Task Scheduler / Linux cron) invokes the existing Flask CLI via venv Python (`venv\Scripts\python.exe -m flask --app app market-data refresh --source manamurah --scheduled`). Exit 0 on success, non-zero if any source failed; failures persisted as `failed`/`partial` with sanitized error, previous observations preserved, no price/decision mutation, per-source isolation preserved.
+- **Documentation:** `docs/MARKET_DATA_SCHEDULING.md` — A. what scheduling does, B. what it does NOT do, C. Windows Task Scheduler (Program/script, Arguments, Start in, Triggers daily 06:30 ManaMurah / monthly 5th PriceCatcher, test, inspect), D. Linux cron, E. recommended frequencies (daily vs monthly, not real-time), F. monitoring via `/market-data` and health. Concurrency: daily vs monthly, <2 min, source-isolated `WHERE source_id=:sid` + unique indexes make overlap idempotent; no distributed lock.
+- **Testing:** `tests/test_market_scheduling.py` (10 tests, manual/scheduled triggers, success/failed/partial, dry-run, CLI compat, doc exists). Full suite 238 passed.
+
+### 2026-09-11 — Phase 10F: Freshness-Aware Market Evidence
+
+- **Centralized freshness:** `services/market_freshness.py` — `classify_market_freshness(source, latest_observed_at)` and `get_product_market_freshness(product_id, shop)` (same `district→state→national` filtering as `get_market_stats`, per-source latest, most conservative when multiple sources contribute: `fresh+stale→stale`, source-isolated, UTC-consistent, future-date safe). Reuses 10C thresholds, no duplicated numbers, multi-source conservative to avoid silently combining fresh+stale into generic `fresh`.
+- **Market analysis:** `services/market_analysis.py` now adds `market_freshness/freshness_label/freshness_warning/freshness_age_days/freshness_source/freshness` to `get_market_stats` (derived, not persisted).
+- **Pricing engine:** `services/pricing_engine.py` reads freshness from market stats, adds `market_freshness/freshness_*` to `mkt_stats_payload`/`llm_payload`/`return` as decision-support signals, appends `freshness_note` to `reasoning` after evidence/trend notes. **Pricing hierarchy unchanged** — freshness never overrides KPDN cap, cost floor, SME floor, or market sanity.
+- **Gemini:** `services/llm_explainer.py` includes freshness in prompt context (`market data freshness is …`) but Gemini remains explanation-only; fallback works without Gemini.
+- **Dashboard/Product:** `services/pricing_dashboard.py` adds `freshness` to rows; `templates/pricing_dashboard.html` adds Freshness column (badge + warning); `templates/product_detail.html` adds `Freshness: Fresh/Aging/Stale` badge + warning alert (server + JS rendering).
+- **Historical compatibility:** `PricingRecommendationDecision` rows remain immutable (no migration, no recalculation); new recommendations carry freshness, old snapshots do not change.
+- **Testing:** `tests/test_market_freshness.py` (17 tests, now 18 with multi-source regression): fresh/aging/stale/unavailable, successful stale (success run but stale obs), failed old obs, source-specific, cross-isolation, strong+fresh/aging/stale, guardrails stale (KPDN cap, cost floor), no auto price/decision, historical unchanged, Gemini not required, Phase 9 consistent, **multi-source conservative** (`TestFreshness_PC` 5d fresh + `TestFreshness_Mana` 10d stale → product freshness `stale`, not `fresh`, and recommendation freshness matches). Full suite 256 passed. No migration for 10F.
+
+---
+
+At the Phase 10F validation point:
+256 tests passed, 0 failed.
+
+Migration head:
+33b959a98288
+
+Observation count:
+1,970,997

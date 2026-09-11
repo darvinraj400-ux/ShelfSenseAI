@@ -192,6 +192,14 @@ def generate_pricing_explanation(product, market_stats, recommendation):
     ge = recommendation.get("guardrail_effect")
     if ge:
         p7_bits.append(f"constraint applied: {ge}")
+    # Phase 10F: freshness qualification (explanatory only, never a guardrail)
+    fresh = recommendation.get("market_freshness") or market_stats.get("market_freshness")
+    fresh_label = recommendation.get("freshness_label") or market_stats.get("freshness_label")
+    fresh_warn = recommendation.get("freshness_warning") or market_stats.get("freshness_warning")
+    if fresh and fresh != "unavailable":
+        p7_bits.append(f"market data freshness is {fresh} ({fresh_label.lower() if fresh_label else fresh})")
+        if fresh_warn:
+            p7_bits.append(f"freshness note: {fresh_warn}")
     if p7_bits:
         p7_bits.append(
             "Do not suggest a different price; explain the given "

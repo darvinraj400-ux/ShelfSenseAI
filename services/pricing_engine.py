@@ -738,6 +738,16 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
     # the same Phase 6 statistics the UI displays.
     evidence = _market_evidence(market)
 
+    # Phase 10F: freshness qualification (read-only, not a guardrail)
+    # Reuses the source-isolated freshness already computed in market stats.
+    # Never changes the price — only qualifies the evidence.
+    _fresh_dict = market.get('freshness') if isinstance(market.get('freshness'), dict) else {}
+    market_freshness = market.get('market_freshness') or _fresh_dict.get('freshness') or 'unavailable'
+    freshness_label = market.get('freshness_label') or _fresh_dict.get('label') or 'Unavailable'
+    freshness_warning = market.get('freshness_warning') or _fresh_dict.get('warning')
+    freshness_age = market.get('freshness_age_days') if market.get('freshness_age_days') is not None else _fresh_dict.get('age_days')
+    freshness_source = market.get('freshness_source') or _fresh_dict.get('source')
+
     # Recommendation status: derived AFTER the guardrails from the final
     # price vs the current price (MAINTAIN / REDUCE / INCREASE /
     # INSUFFICIENT_DATA). Pure comparison — no new pricing logic.
@@ -794,13 +804,25 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
                          "pricing rules.")
         trend_note = None
 
-    # Phase 7: evidence/trend notes are appended AFTER the guardrail
+    # Phase 10F: freshness qualification (read-only, separate from evidence strength)
+    freshness_note = None
+    if has_market_data and market_freshness != 'unavailable':
+        if market_freshness == 'fresh':
+            freshness_note = f"Market data is {freshness_label.lower()} — evidence reflects current conditions."
+        elif market_freshness == 'aging':
+            # Use the warning from the freshness service if available
+            freshness_note = f"Market data is {freshness_label.lower()} — {freshness_warning or 'observations are becoming less current.'}"
+        elif market_freshness == 'stale':
+            freshness_note = f"Market data is {freshness_label.lower()} — {freshness_warning or 'historical; current conditions may have changed.'}"
+    # Phase 7: evidence/trend/freshness notes are appended AFTER the guardrail
     # reasons so the traceability order reads: prediction -> constraints
-    # -> market context.
+    # -> market context -> freshness qualification.
     if evidence_note:
         reasoning.append(evidence_note)
     if trend_note:
         reasoning.append(trend_note)
+    if freshness_note:
+        reasoning.append(freshness_note)
     if guardrail_effect:
         reasoning.append(guardrail_effect)
 
@@ -822,6 +844,12 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
         "difference": market.get("difference"),
         "difference_percent": market.get("difference_percent"),
         "latest_observed_at": market.get("latest_observed_at"),
+        # Phase 10F freshness (read-only qualification)
+        "market_freshness": market_freshness,
+        "freshness_label": freshness_label,
+        "freshness_warning": freshness_warning,
+        "freshness_age_days": freshness_age,
+        "freshness_source": freshness_source,
     }
     llm_payload = {
         "recommended_price": ml_prediction,
@@ -838,6 +866,12 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
         "target_margin": float(product.target_margin),
         "sales_velocity": velocity,
         "stock_level": stock_level,
+        # Phase 10F freshness (explanatory only, never a guardrail)
+        "market_freshness": market_freshness,
+        "freshness_label": freshness_label,
+        "freshness_warning": freshness_warning,
+        "freshness_age_days": freshness_age,
+        "freshness_source": freshness_source,
     }
     llm_explanation = (None if skip_llm
                        else generate_pricing_explanation(
@@ -869,6 +903,13 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
         "guardrail_effect": guardrail_effect,
         "evidence_note": evidence_note,
         "trend_note": trend_note,
+        # Phase 10F freshness (read-only qualification, never a guardrail)
+        "market_freshness": market_freshness,
+        "freshness_label": freshness_label,
+        "freshness_warning": freshness_warning,
+        "freshness_age_days": freshness_age,
+        "freshness_source": freshness_source,
+        "freshness_note": freshness_note,
         "regulatory_cap_applied": regulatory_cap_applied,
         "government_ceiling_price": float(product.government_ceiling_price) if product.government_ceiling_price else None,
     }

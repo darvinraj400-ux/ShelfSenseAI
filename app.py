@@ -684,6 +684,58 @@ class ProductMarketMatch(db.Model):
                                    backref=db.backref('market_matches',
                                                       cascade='all, delete-orphan'))
     market_item = db.relationship('MarketItem', backref='product_matches')
+
+
+# -------------------------------------------------
+# Phase 10B — Market Refresh Run History
+# One row per source refresh attempt. Makes the orchestrator
+# (Phase 10A) observable without inspecting terminal logs.
+# See services/market_refresh_service.py and
+# services/market_refresh_status.py.
+# -------------------------------------------------
+class MarketRefreshRun(db.Model):
+    """Persistent history of market data refresh attempts.
+
+    Covers both PriceCatcher (raw archive + ETL) and ManaMurah (FAMA).
+    One row per source per invocation so a batch ``source=all`` that
+    partially fails still records per-source truth (PriceCatcher success
+    + ManaMurah failed, not a fake combined success).
+
+    Timestamps use the project's UTC convention (naive UTC datetimes
+    via ``datetime.now(timezone.utc)`` — same as PriceHistory etc.) so
+    existing tooling and MySQL DATETIME columns stay consistent.
+
+    Counters are non-nullable with 0 defaults — a failed run that never
+    produced counters still has a valid row (started/finished + error).
+    """
+    __tablename__ = 'market_refresh_run'
+    __table_args__ = (
+        db.Index('ix_market_refresh_run_source_started', 'source_name', 'started_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    source_name = db.Column(db.String(50), nullable=False)
+    #   - 'pricecatcher' | 'manamurah' (lowercase, matches service VALID_SOURCES).
+    #     Kept as plain string (no FK to market_source) so future sources
+    #     (e.g. FAMA-sabah) can be recorded before their MarketSource row
+    #     exists, and so renaming a MarketSource does not orphan history.
+    started_at = db.Column(db.DateTime, nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    finished_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(20), nullable=False)
+    #   - 'success' | 'partial' | 'failed'
+    inserted = db.Column(db.Integer, nullable=False, default=0)
+    updated = db.Column(db.Integer, nullable=False, default=0)
+    duplicates_skipped = db.Column(db.Integer, nullable=False, default=0)
+    rejected = db.Column(db.Integer, nullable=False, default=0)
+    errors = db.Column(db.Integer, nullable=False, default=0)
+    latest_observed_at = db.Column(db.DateTime, nullable=True)
+    #   - latest market observation date contained in the refreshed data
+    #     (NOT the ingestion time). May be a date or datetime depending on
+    #     source; stored as DATETIME for uniformity.
+    error_message = db.Column(db.Text, nullable=True)
+    triggered_by = db.Column(db.String(20), nullable=False, default='manual')
+    #   - 'manual' (CLI / code) | 'scheduled' (future 10E). Kept for audit.
 # -------------------------------------------------
 
 # Phase 3C/3D services. Imported HERE (not at the top of the file)
@@ -1064,6 +1116,57 @@ def pricing_dashboard():
         sort=filters['sort'])
     return render_template('pricing_dashboard.html', result=result,
                            filters=filters, unassigned=False)
+
+
+@app.route('/market-data')
+@login_required
+@role_required('owner', 'manager')  # Phase 10D: Owner/Manager only, Staff 403
+def market_data():
+    """Phase 10D: Market Data Monitoring (read-only).
+
+    Shows per-source health (via Phase 10C), latest refresh metrics,
+    and recent refresh history. Never mutates Product, PriceHistory,
+    PricingRecommendationDecision, or MarketRefreshRun.
+    """
+    from services.market_refresh_status import latest_run, latest_successful_run, recent_runs
+    from services.market_refresh_health import get_refresh_health
+
+    # Active sources drive the overview cards (future sources appear automatically)
+    sources = MarketSource.query.filter_by(is_active=True).order_by(MarketSource.name).all()
+    # Also include inactive sources as separate muted cards (so they are not mistaken for failed active)
+    inactive_sources = MarketSource.query.filter_by(is_active=False).order_by(MarketSource.name).all()
+
+    source_cards = []
+    for src in sources:
+        health = get_refresh_health(src.name)
+        latest = latest_run(src.name)
+        latest_success = latest_successful_run(src.name)
+        source_cards.append({
+            "source": src,
+            "health": health,
+            "latest_run": latest,
+            "latest_success": latest_success,
+        })
+
+    inactive_cards = []
+    for src in inactive_sources:
+        health = get_refresh_health(src.name)
+        latest = latest_run(src.name)
+        latest_success = latest_successful_run(src.name)
+        inactive_cards.append({
+            "source": src,
+            "health": health,
+            "latest_run": latest,
+            "latest_success": latest_success,
+        })
+
+    # Recent history: bounded, newest first, across all sources
+    recent = recent_runs(limit=30)
+
+    return render_template('market_data.html',
+                           source_cards=source_cards,
+                           inactive_cards=inactive_cards,
+                           recent_runs=recent)
 
 
 @app.route('/product/new', methods=['GET', 'POST'])
@@ -2087,6 +2190,100 @@ def csrf_error(error):
     # Expired/invalid CSRF token (e.g. page left open too long).
     flash('Your session security token expired or was invalid. Please try again.', 'danger')
     return redirect(request.referrer or url_for('login'))
+
+
+# ------------------------- PHASE 10A — MARKET DATA REFRESH CLI -------------------------
+# Orchestrates existing market ingestion paths via
+# services/market_refresh_service.py (REUSES, never duplicates).
+# This CLI is an additional entry point — existing scripts
+# (import_pricecatcher.py, scripts/etl_pricecatcher.py,
+# scripts/sync_market_data.py) remain authoritative and unchanged.
+# No scheduling, no monitoring page, no automatic repricing here.
+import click  # noqa: E402  (Flask bundles click)
+
+
+@app.cli.group("market-data")
+def market_data_cli():
+    """Market data maintenance (Phase 10A)."""
+    pass
+
+
+@market_data_cli.command("refresh")
+@click.option("--source", "source", default="all",
+              type=click.Choice(["pricecatcher", "manamurah", "all"],
+                                case_sensitive=False),
+              help="Which source to refresh (pricecatcher | manamurah | all).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Validate without persisting (ManaMurah validation, "
+                   "PriceCatcher ETL skipped).")
+@click.option("--days", default=30, type=int,
+              help="ManaMurah trailing window in days (1-90, default 30).")
+@click.option("--state", default=None,
+              help="ManaMurah state slug for state-grain data (e.g. johor).")
+@click.option("--scheduled", is_flag=True, default=False,
+              help="Mark run as scheduled (triggered_by=scheduled) for audit. "
+                   "Use with OS scheduler (cron / Task Scheduler) so history "
+                   "distinguishes manual vs scheduled runs.")
+def refresh_market_data(source, dry_run, days, state, scheduled):
+    """Refresh market data via the unified service (Phase 10A/10E).
+
+    Examples:
+      flask market-data refresh --source manamurah
+      flask market-data refresh --source pricecatcher --dry-run
+      flask market-data refresh --source all --days 14 --state johor
+      flask market-data refresh --source manamurah --scheduled  (cron/Task Scheduler)
+    """
+    from services.market_refresh_service import MarketDataRefreshService
+    svc = MarketDataRefreshService()
+    triggered_by = "scheduled" if scheduled else "manual"
+    click.echo(f"Market data refresh: source={source} dry_run={dry_run} days={days} state={state or 'national'} triggered_by={triggered_by}")
+    results = svc.refresh(sources=source, dry_run=dry_run, days=days, state=state, triggered_by=triggered_by)
+    for name, res in results.items():
+        status = "OK" if res.success else "FAIL"
+        click.echo(f"  [{status}] {name}: inserted={res.inserted} updated={res.updated} "
+                   f"duplicates={res.duplicates} rejected={res.rejected} errors={res.errors}"
+                   f"{(' latest='+str(res.latest_observed_at)) if res.latest_observed_at else ''}"
+                   f"{(' error='+res.error_message) if res.error_message else ''}")
+    # Non-zero exit when any source failed (useful for cron monitoring)
+    failed = [n for n, r in results.items() if not r.success]
+    if failed:
+        raise click.ClickException(f"Refresh failed for: {', '.join(failed)}")
+
+
+@market_data_cli.command("health")
+@click.option("--source", "source", default="all",
+              type=click.Choice(["pricecatcher", "manamurah", "all"],
+                                case_sensitive=False),
+              help="Which source to check (pricecatcher | manamurah | all).")
+def health_market_data(source):
+    """Report market refresh health (read-only, Phase 10C).
+
+    Evaluates the last refresh run + live observation freshness without
+    triggering a new refresh or mutating any product data.
+
+    Examples:
+      flask market-data health --source manamurah
+      flask market-data health --source all
+    """
+    from services.market_refresh_health import get_refresh_health
+    targets = ["pricecatcher", "manamurah"] if source.lower() == "all" else [source.lower()]
+    for name in targets:
+        h = get_refresh_health(name)
+        level = h.health_level.upper()
+        click.echo(f"[{level}] {name}: status={h.status or 'no_run'} "
+                   f"obs={h.observation_count} latest={h.latest_observed_at or 'none'} "
+                   f"age={h.refresh_age_days if h.refresh_age_days is not None else 'n/a'}d "
+                   f"inserted={h.inserted} rejected={h.rejected} errors={h.errors_count}")
+        for c in h.checks:
+            icon = {"info": " ", "warning": "!", "error": "X"}.get(c["level"], "?")
+            if c["level"] != "info":
+                click.echo(f"  {icon} {c['name']}: {c['message']}")
+        if h.warnings:
+            for w in h.warnings:
+                click.echo(f"  ! warning: {w}")
+        if h.errors:
+            for e in h.errors:
+                click.echo(f"  X error: {e}")
 
 
 # ------------------------- SCHEMA MANAGEMENT -------------------------

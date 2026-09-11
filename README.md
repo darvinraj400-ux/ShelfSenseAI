@@ -1,156 +1,181 @@
 # ShelfSenseAI
 
-ShelfSenseAI is a Flask-based retail management and market intelligence application developed as a Final Year Project (FYP). It helps local retailers understand their product pricing relative to market conditions and make better, data-driven pricing decisions using deterministic calculations, Machine Learning (Random Forest), and Generative AI (Google Gemini).
+ShelfSenseAI is a Flask-based retail management and market intelligence application developed as a Final Year Project (FYP) for Malaysian small retail (kedai runcit). It helps local retailers understand their product pricing relative to verified market observations and make better, human-approved pricing decisions. **AI recommends and explains; business guardrails remain authoritative; human approval remains part of the decision process.** There is no autonomous repricing.
 
-## System Architecture
+## 1. Project Overview
+Decision Support System (DSS) for dry-goods retail. The shop sets cost, target margin, and selling price; the system shows where that price sits versus the local market and explains a guardrailed recommendation. The retailer explicitly applies or dismisses.
 
-ShelfSenseAI follows a decoupled architecture, separating core retail management from the market intelligence engine.
+## 2. Problem Statement
+Small retailers lack visibility into hyper-local market pricing (district → state → national) and risk either underpricing (margin loss) or overpricing (lost sales) or breaching KPDN price controls / PCAPA. ShelfSenseAI makes the market visible and the recommendation traceable.
 
-*   **Core Retail:** Shop management, Auth, Employee roles, Inventory, Sales, Price History.
-*   **Market Intelligence:** Idempotent ETL pipeline (PriceCatcher), geographic market localization (3-tier fallback), exact/fuzzy matching (RapidFuzz), statistical market analysis (PPI), and Explainable AI (raw competitor observation data).
-*   **AI/ML Engine:** Random Forest Regressor trained on 4.5 years of real KPDN PriceCatcher data (2022-2026, 5.4M+ observations) with deterministic guardrails, and Gemini LLM (3-layer fallback for natural-language explanations).
+## 3. Project Scope
+- Malaysian local retail, dry goods (PriceCatcher `BARANGAN SEGAR` and `MAKANAN SIAP MASAK` excluded)
+- Products do NOT need to exist in PriceCatcher — a product stands alone even with no market match
+- PriceCatcher is one market source, not the only source (ManaMurah/FAMA is supplementary)
+- Fresh goods / ready-to-eat are outside core scope
+- No real-time PriceCatcher API; data is via monthly Parquet archive + ETL
 
-## Technology Stack
+## 4. Key Features
+- Shop isolation, Owner/Manager/Staff RBAC, product CRUD with brand/category/quantity/unit
+- Sales & inventory (atomic sale + stock decrease, adjustments, no negative stock)
+- Employee invitations and notifications, shop create/join
+- PriceCatcher autocomplete, RapidFuzz matching (exact/fuzzy/manual, verified/rejected)
+- Market intelligence: min/max/mean/median/spread, quartiles, premise/observation counts, market position (Below/Near/Above, 5% band), competitor snapshot (latest date only), historical trend (server-side `PERCENTILE_CONT`), district→state→national fallback
+- Intelligent pricing: ML candidate → KPDN cap → cost floor (×1.05) → SME target-margin floor → market sanity → PCAPA informational warning → final price; status (MAINTAIN/REDUCE/INCREASE), evidence, trend
+- Human decision workflow: PENDING snapshot → Apply (atomic price+PriceHistory+APPLIED, stale protection, server-side recomputation) / Dismiss (reason/note) — no automatic repricing, idempotent, CSRF, shop isolation
+- Shop-wide pricing intelligence dashboard (`/pricing-dashboard`, read-only, `skip_llm`)
+- Market data automation: unified refresh service, persistent audit, health/freshness, monitoring UI, OS scheduling
 
-*   **Backend:** Python 3, Flask, SQLAlchemy, MySQL
-*   **Machine Learning:** Scikit-learn (RandomForestRegressor)
-*   **AI Integration:** Google GenAI SDK (Gemini 3.5 Flash Lite)
-*   **Data Matching:** RapidFuzz
-*   **Frontend:** HTML5, Bootstrap 5, Chart.js, Vanilla JS (Fetch API)
-*   **Testing:** Pytest
+## 5. Technology Stack
+- **Backend:** Python 3.9+, Flask, Flask-SQLAlchemy, Flask-Migrate/Alembic, MySQL/MariaDB, PyMySQL
+- **ML/AI:** scikit-learn `RandomForestRegressor`, Google GenAI SDK `Gemini 3.5 Flash Lite` (3-layer fallback)
+- **Market:** Pandas, PyArrow, RapidFuzz, `mcp` SDK (ManaMurah streamable HTTP)
+- **Frontend:** HTML5, Bootstrap 5, Vanilla JS (Fetch API), Jinja2
+- **Testing/Security:** Pytest, Flask-Login, Flask-WTF CSRF, Werkzeug bcrypt
+- **No Celery/Redis/Kafka/APScheduler** — scheduling is OS-level (cron / Task Scheduler) invoking the Flask CLI
 
-## Setup & Installation
+## 6. Architecture
+```
+Market Sources (PriceCatcher monthly Parquet / ManaMurah FAMA daily)
+        ↓
+Market Data Refresh Service (reuses import_pricecatcher + ETL + mcp_client/market_ingestion)
+        ↓
+MarketRefreshRun (persistent audit: inserted/updated/duplicates/rejected/errors, latest_observed_at, status, triggered_by)
+        ↓
+Health / Freshness (source-specific thresholds, conservative multi-source)
+        ↓
+MarketPriceObservation (premise-level, 1 raw → 1 observation, ~1.97M rows, indexed)
+        ↓
+Market Intelligence (geographic 3-tier fallback, server-side aggregation)
+        ↓
+Pricing Recommendation (ML candidate → guardrails → final price → decision-support signals → Gemini explanation)
+        ↓
+Human Decision (Apply/Dismiss) → PriceHistory + PricingRecommendationDecision
+```
+- **Pricing hierarchy (authoritative):** ML/Rule Candidate → KPDN Regulatory Cap → Cost Floor (×1.05) → SME Target-Margin Floor → Market Sanity → **FINAL PRICE** → Decision-support metadata → Gemini explanation → Human Apply/Dismiss. Freshness never overrides guardrails.
+- **Market freshness:** `fresh/aging/stale/unavailable` per source (ManaMurah 3/7d, PriceCatcher 35/60d), multi-source conservative (fresh+stale→stale), evidence (`Strong/Moderate/Limited/Unavailable`) and freshness are separate dimensions.
 
-### Prerequisites
-*   Python 3.9+
-*   MySQL Server
-*   `pip install -r requirements.txt` (includes `pandas`, `pyarrow`, `scikit-learn`, `rapidfuzz`, `google-genai`)
+## 7. User Roles / RBAC
+- **Owner:** full access (products, sales, inventory, employees, invitations, pricing decisions, market-data monitoring, pricing dashboard)
+- **Manager:** products, sales, inventory, pricing decisions, monitoring, dashboard (no employee invite/revoke)
+- **Staff:** view dashboard/product pages, record sales (no product add/edit/delete, no pricing apply/dismiss, no monitoring)
+- **Unassigned:** created via “Join Shop”, must accept invitation to gain shop linkage; enforced via `@login_required` + `@role_required` + `shop_id` checks (shop isolation on every query, 403 on cross-shop).
 
-### Step 1 — Environment Setup
+## 8. Product and Inventory Functionality
+- Product identity: name, brand, category, quantity, unit, cost_price, selling_price, target_margin, baseline_margin (PCAPA anchor), `is_price_controlled` + `government_ceiling_price`; `size_label` (package) vs `Inventory.current_stock` (shelf count).
+- Sales: per-unit price snapshot at sale time, atomic sale + stock decrease, revenue = qty×price (not stored).
+- Inventory: `minimum_stock`, manual adjustments with reason/user, no negative stock.
+
+## 9. Market Data Architecture
+- **Models:** `MarketSource` (PriceCatcher/ManaMurah), `MarketItem` (external_id, raw/normalized title, package size), `MarketPriceObservation` (premise_code, regular/promo/effective, normalized_unit_price, state/district, observed_at, unique `uq_market_obs_premise`), `ProductMarketMatch` (shop_product ↔ market_item, confidence, `is_verified/is_rejected`).
+- **Normalization:** `utils/normalization.clean_text`, `normalize_package_size` (g→kg, ml→l), `calculate_unit_price` (RM/base unit, pure, tested).
+- **Indexes:** `ix_market_item_normalized_title`, `ix_observed_at`, `ix_market_obs_item_geo(market_item_id,state,district,observed_at)`, `uq_market_obs_premise`, `ix_market_item_external`, `uq_price_natural(date,premise_code,item_code)`.
+
+## 10. PriceCatcher
+- Monthly Parquet from `storage.data.gov.my/pricecatcher` → raw archive (`lookup_item`, `lookup_premise`, `price`) with natural-key unique index; additive, never deletes months; `import_pricecatcher.py --month/--start-month/--end-month --local-dir --dry-run` + chunked upserts.
+- `scripts/etl_pricecatcher.py` rebuilds premise-level observations (1 raw → 1 observation, exact price, no averaging), stable `MarketItem` ids (so `ProductMarketMatch` survives), source-isolated (`WHERE source_id=:sid`), unique index prevents duplicates.
+- Denormalized `price_catcher_item` for autocomplete (all 405 items, not only those with observations).
+
+## 11. ManaMurah / FAMA
+- Public read-only MCP endpoint `https://mcp.manamurah.com/mcp` (no credentials) via `services/mcp_client.py` (streamable HTTP, JSON-RPC, defensive parsing, plain-dict records). Only FAMA `fama_price_history` (daily, independent catalogue `1..46`) is ingested — KPDN weekly tools are intentionally ignored to avoid duplicating PriceCatcher. `FAMA_SCOPE_ITEMS` (5 dry-goods: TELUR AYAM, BERAS SAWAH/IMPORT, SANTAN BERSARIKAT, UBI KENTANG) is hard-wired; `services/market_ingestion.py` validates, normalizes via `utils`, upserts by `(source_id,external_id)` + `(market_item_id,observed_at,state,district)`, per-item commit/rollback.
+- `scripts/sync_market_data.py --days 30 --state johor` — idempotent, source-isolated, never purges real ManaMurah demo data.
+
+## 12. Product-Market Matching
+- RapidFuzz `WRatio` + `token_set_ratio` 75/25 blend on `clean_text` titles, filtered by `ProductMarketMatch.is_verified` (owner/manager only) and `is_rejected`. Suggestions are unverified until confirmed; adding a product auto-suggests candidates.
+
+## 13. Market Evidence
+- `_market_evidence` in `pricing_engine.py`: `Unavailable n<3 or premises<1`, `Limited <5 premises or <20 obs`, `Moderate ≥3 premises & ≥5 obs`, `Strong ≥5 premises & ≥20 obs & district/state tier`. Premise/observation counts and tier come from `get_market_stats`.
+
+## 14. Market Freshness
+- Centralized `services/market_freshness.py` reusing 10C thresholds: ManaMurah `fresh 0-3d, aging 4-7d, stale >7d`; PriceCatcher `fresh 0-35d, aging 36-60d, stale >60d`; generic `7/14d`. `classify_market_freshness(source, latest_observed_at)` and `get_product_market_freshness(product_id, shop)` (same `district→state→national` filtering as `get_market_stats`, per-source latest, most conservative when multiple sources contribute: `fresh+stale→stale`). Freshness is derived, not persisted; historical `PricingRecommendationDecision` rows remain immutable.
+
+## 15. Pricing Recommendation Pipeline
+- **Candidate:** ML `RandomForestRegressor` (523k Johor samples, MAE RM0.0639, R² 0.9999) or rule fallback `cost×(1+margin)`.
+- **Guardrails (strict order):** KPDN cap (if `is_price_controlled`), cost floor, SME target-margin floor (hard minimum), market sanity (0.7×min to 1.5×max), PCAPA informational warning (tolerance 1.5pp).
+- **Signals:** `status` (±0.5% band), `market_evidence`, `trend` (`_classify_trend` on 90-day `get_market_trend` medians), `guardrail_effect`, `market_freshness`/`freshness_warning` (10F, explanatory only), confidence (`high/medium/low`).
+- **No automatic repricing** — `Product.selling_price` only changes via explicit Phase 8 Apply.
+
+## 16. AI / Gemini Role
+- `services/llm_explainer.py` — Gemini **explanation-only**: builds a prompt from deterministic facts (cost, margins, median, guardrails, evidence, trend, freshness) and asks for 2-3 sentences <100 words. Three-layer fallback: live Gemini → exception catch → deterministic `_fallback` string. Gemini never sets `freshness`, `evidence`, `status`, `price`, or guardrails.
+
+## 17. Human Approval Workflow
+- `services/pricing_workflow.py` + `PricingRecommendationDecision` + migration `f9e8d7c6b5a4` (PENDING→APPLIED/DISMISSED, `current_price` staleness check, server-side recomputation, atomic `Product`+`PriceHistory`+decision, `DISMISS_REASONS`, idempotent apply, `shop_id` FK for cross-shop 403).
+- Routes: `POST /api/product/<pid>/decision` (snapshot, reuse identical PENDING), `POST /api/decision/<did>/apply` (stale 409, recomputed price), `POST /api/decision/<did>/dismiss` (reason/note, 200). Product page records snapshot lazily for owner/manager only.
+
+## 18. Market Monitoring
+- `GET /market-data` (Owner/Manager, Staff 403) — `services/market_refresh_status` + `market_refresh_health`: per-source cards (Healthy/Warning/Unhealthy badge, latest refresh `status/finished_at` or `Never refreshed`, latest successful, latest observation or `No observations`, metrics `inserted/updated/duplicates/rejected/errors`), health details (fresh/aging/stale, partial/failed, error messages sanitized), and recent history table (30 rows, Date/Time, Source, Status, Inserted, Updated, Duplicates, Rejected, Errors, Latest Observation, Triggered By). Read-only, never triggers refresh or creates decisions.
+
+## 19. Refresh History
+- `MarketRefreshRun` + migration `33b959a98288` (`source_name, started_at, finished_at, status success/partial/failed, inserted/updated/duplicates_skipped/rejected/errors, latest_observed_at, error_message (sanitized), triggered_by manual/scheduled/test`, index `source_name,started_at`). One row per source per invocation, so `source=all` with one success + one fail preserves both truths.
+
+## 20. Health Monitoring
+- `services/market_refresh_health.py` — per-source health from `MarketRefreshRun` + live `COUNT(*)/MAX(observed_at)`: checks refresh status, observation availability, freshness (source-specific thresholds), recency, metrics; derives `healthy/warning/unhealthy`. CLI `flask market-data health --source all|pricecatcher|manamurah` (read-only).
+
+## 21. Scheduling
+- **No Flask background scheduler** (no Celery/Redis/Kafka/APScheduler). OS scheduler invokes the existing Flask CLI:
+  - Windows Task Scheduler: Program `venv\Scripts\python.exe`, Arguments `-m flask --app app market-data refresh --source manamurah --scheduled` (daily 06:30) and `... --source pricecatcher --scheduled` (monthly 5th), Start in `<project-root>`.
+  - Linux cron: `30 6 * * * cd /path && venv/bin/python -m flask --app app market-data refresh --source manamurah --scheduled`
+- `--scheduled` sets `triggered_by=scheduled` (vs `manual`/`test`) so history distinguishes manual vs scheduled; exit 0 on success, non-zero if any source failed; failures are persisted as `failed`/`partial` with sanitized `error_message`, previous observations remain, no price/decision mutation. Concurrency: daily vs monthly, <2 min, source-isolated `WHERE source_id=:sid` + unique indexes make overlap idempotent; no distributed lock. See `docs/MARKET_DATA_SCHEDULING.md`.
+
+## 22. Installation
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+# Windows: venv\Scripts\activate  # Linux: source venv/bin/activate
+pip install -r requirements.txt  # pandas, pyarrow, scikit-learn, rapidfuzz, google-genai, mcp
 ```
 
-Create a `.env` file based on `.env.example`:
+## 23. Environment Setup
+Create `.env` from `.env.example`:
 ```env
 SECRET_KEY=your_secret_key
 DATABASE_URL=mysql+pymysql://user:pass@localhost/shelfsenseai
-GEMINI_API_KEY=your_gemini_api_key
+GEMINI_API_KEY=your_gemini_api_key   # optional; fallback works without it
+# Optional override for self-hosted ManaMurah MCP:
+# MANAMURAH_MCP_URL=https://mcp.manamurah.com/mcp
 ```
 
-### Step 2 — Database Migration & Data Loading
+## 24. Running the Application
 ```bash
 flask db upgrade
-python import_pricecatcher.py --month 2026-08       # one month
-python import_pricecatcher.py --start-month 2026-06 --end-month 2026-08   # backfill range
+python import_pricecatcher.py --month 2026-08
 python scripts/etl_pricecatcher.py
 python seed_demo.py
-```
-
-Both steps are **idempotent and non-destructive**:
-
-* `import_pricecatcher.py` downloads monthly PriceCatcher Parquet files and appends them to the raw archive (`price`, `lookup_item`, `lookup_premise`). Months coexist — importing a new month never deletes older months, and re-importing the same month inserts zero duplicates (a database unique constraint on `date + premise_code + item_code` guards the archive). `--local-dir ./pc_cache` caches downloaded files for offline re-runs.
-* `scripts/etl_pricecatcher.py` rebuilds **premise-level** `MarketPriceObservation` rows — one raw price record becomes one observation with its exact price, `premise_code`, state/district, and per-observation normalized unit price. It only rebuilds the PriceCatcher source's observations (ManaMurah/FAMA are untouched), keeps `MarketItem` ids stable so `ProductMarketMatch` survives, and is safe to rerun (zero duplicates via the `uq_premise_obs` unique index on `market_item_id + premise_code + observed_at`).
-
-### Step 3 — Train the ML Model (IMPORTANT)
-
-The ML pricing engine requires a trained model file (`ml/pricing_model.pkl`). This is **not** checked into Git — you must train it locally using the included training script.
-
-```bash
-python scripts/train_pricing_model.py
-```
-
-This script will:
-1. Download **56 monthly KPDN PriceCatcher datasets** (Jan 2022 – Aug 2026) from Malaysia's [Open Data portal](https://data.gov.my).
-2. Merge with item and premise lookup tables.
-3. Filter for **Johor state** (customizable via `TARGET_STATE` / `TARGET_DISTRICT` constants in the script).
-4. Engineer features: market median, min, max, spread, cost price, target margin.
-5. Train a **RandomForestRegressor** using scikit-learn.
-6. Save the model to `ml/pricing_model.pkl` (~633 KB).
-
-**Expected output:**
-```
-Processed 56/56 months (0 failed)
-Unique items: 325
-Training samples: 523,590
-Model MAE: RM0.0639 (6.4 sen average error)
-Model R²: 0.9999
-Top features: cost_price (88.1%), market_median (11.1%), target_margin (0.7%)
-Model saved to ml/pricing_model.pkl (633 KB)
-```
-
-> **Note:** The training requires downloading ~300 MB of parquet files from data.gov.my. The script is memory-efficient — it processes each month individually instead of loading all files at once.
-
-### Step 4 — Sync ManaMurah Market Data (Optional, Phase 5)
-
-ShelfSenseAI can augment its KPDN PriceCatcher data with **FAMA Panduan Harga Harian** daily prices via the [ManaMurah MCP server](https://github.com/manamurah/mcp-server) — a public, read-only MCP endpoint (no API key required):
-
-```bash
-python scripts/sync_market_data.py              # national grain, last 30 days
-python scripts/sync_market_data.py --days 14 --state johor   # state grain
-```
-
-The script is fully idempotent — run it as many times as you like; a second run inserts zero duplicates. It ingests only FAMA's independent daily catalogue (eggs, rice, staples) and never duplicates PriceCatcher data.
-
-### Step 5 — Run the Application
-```bash
+python scripts/train_pricing_model.py   # downloads 56 months, ~300MB, outputs 633KB model
 flask run
 ```
 
-## Development Phases
-
-| Phase | Focus | Key Deliverables |
-|-------|-------|------------------|
-| **1–2** | Core Foundation | Auth, RBAC, Shop isolation, Products, Inventory, Sales, Employee invitations, Notifications |
-| **3A–B** | Market Data Foundation | MarketSource/MarketItem/MarketPriceObservation models, idempotent ETL pipeline |
-| **3C–D** | Market Intelligence | RapidFuzz 75/25 matching, geographic localization, statistical analysis (PPI) |
-| **3E** | ML Pricing Engine | RandomForestRegressor trained on 5.4M+ real KPDN observations (2022–2026) |
-| **3F** | AI Explainer | Gemini 3.5 Flash Lite with 3-layer fault-tolerant fallback |
-| **4** | Hardening | Dashboard analytics, KPDN price control guardrails, Explainable AI, 84/84 tests passing |
-| **5** | Multi-Source Market Data | ManaMurah MCP client + source-agnostic ingestion layer, idempotent FAMA daily-price sync |
-| **6** | Historical Archive + Premise-Level Observations | Configurable monthly PriceCatcher import (no `replace`), raw archive with unique natural key, premise-level `MarketPriceObservation` (100% raw retention), premise column in Explainable AI table |
-| **6 (MI)** | Market Intelligence & Visualization | Market summary stats (min/median/mean/max/spread/premise count), geographic tier labeling, latest-snapshot competitor table with store names, market position (Below/Near/Above vs median), min→max distribution bar, SVG historical trend chart (server-side `PERCENTILE_CONT` medians), pricing-engine market context (guardrails untouched) |
-| **7** | Intelligent Pricing Decision Support | Explainable recommendation status (MAINTAIN/REDUCE/INCREASE with documented tolerance), market trend classification (Rising/Stable/Falling/insufficient), market evidence rating (Strong/Moderate/Limited/Unavailable), guardrail-effect explanations, decision-support badges in the pricing pane; existing guardrails/ML/Gemini roles unchanged, Gemini explains but never sets prices, 159 tests passing |
-| **7.1** | Validation & Corrective Fixes | Full read-only audit (all scenarios validated); SME margin "blend" corrected to an accurately-documented hard target-margin floor (behaviour unchanged), pricing API now passes the shop context so the JS pane uses the same district→state→national tier as the page, recommendation-difference badge wording fixed, 161 tests passing |
-| **8** | Pricing Decision Workflow & Auditability | Every reviewed recommendation is snapshotted as a `PricingRecommendationDecision` (recommended price, current price, engine status, market tier/median, evidence, trend, guardrails, timestamp). Retailer explicitly **Apply**s (atomic: price update + existing PriceHistory + decision APPLIED) or **Dismiss**es with a recorded reason. Stale-snapshot protection rejects applies when the product price changed after the snapshot; the applied price is always recomputed server-side by the deterministic engine (client-supplied prices are ignored). Recommendation-decision history card on the product page; staff role read-only, cross-shop 403, CSRF-protected POST-only actions, 175 tests passing |
-| **9** | Shop-wide Pricing Intelligence Dashboard & Reporting | `/pricing-dashboard` (owner/manager): summary cards (total / market-covered / above-below-market / pending / applied-dismissed), pricing opportunity table with deterministic priority sorting (engine status + evidence — never moves a price), filters (status, decision, evidence, tier, search), server-side sorting + pagination, lightweight distribution panels (status / decisions / market position), proper empty states, product drill-down into the Phase 8 workflow. Read-only GET: no price changes, no decision records created by dashboard views; reuses engine + market services with `skip_llm` (Gemini never involved), 185 tests passing |
-| **FYP** | Presentation | `DEMO_ROLES_AND_SCRIPT.md` (5-part speaking framework), `TEAM_ROLE_MASTERY_GUIDE.md` (deep comprehension) |
-
-## ML Training Details
-
-The pricing model is trained on **real government data** from [data.gov.my/pricecatcher](https://storage.data.gov.my/pricecatcher/):
-
-*   **Data source:** KPDN (Kementerian Perdagangan Dalam Negeri dan Kos Sara Hidup) PriceCatcher dataset
-*   **Coverage:** 56 monthly files (January 2022 – August 2026)
-*   **Raw observations:** 5,438,940 price records from ~3,900 premises
-*   **Localization:** Filtered for Johor state (325 unique items)
-*   **Training samples:** 523,590 (aggregated by item × date)
-*   **Model:** RandomForestRegressor (scikit-learn)
-*   **Performance:** MAE = RM0.0639 (6.4 sen), R² = 0.9999
-
-The training script (`scripts/train_pricing_model.py`) downloads data from `storage.data.gov.my` automatically. It uses a memory-efficient pipeline that processes each month individually rather than loading all 56 files into memory at once.
-
-## FYP Presentation Documents
-
-| Document | Purpose |
-|----------|---------|
-| `DEMO_ROLES_AND_SCRIPT.md` | Verbatim speaking scripts with WHAT/WHY/HOW/EVIDENCE/RESULT framework for all 3 team members |
-| `TEAM_ROLE_MASTERY_GUIDE.md` | Deep-comprehension knowledge base with domain mastery breakdowns and Q&A prep |
-| `DEMO.md` | Quick demo walkthrough for the live demonstration |
-| `API_REFERENCE.md` | Complete API endpoint documentation |
-| `SCREENSHOT_GUIDE.md` | Step-by-step screenshot guide for the FYP report |
-
-## Testing
-
+## 25. CLI Commands
 ```bash
-# Run all 84 tests under pytest
-python -m pytest tests/ -v
-
-# Run standalone tests (also 84 tests)
-python tests/test_market_models.py
-python tests/test_normalization.py
+flask market-data refresh --source manamurah --dry-run
+flask market-data refresh --source pricecatcher --dry-run
+flask market-data refresh --source all --dry-run
+flask market-data refresh --source manamurah --days 14 --state johor
+flask market-data refresh --source manamurah --scheduled   # for cron/Task Scheduler
+flask market-data health --source all
+flask market-data health --source pricecatcher
 ```
 
-All 84 tests pass with zero failures. Tests cover: normalization (16), market models (7), matching (15), market analysis (13), pricing engine (10), LLM explainer (7), dashboard metrics (7), employee removal (8), and end-to-end integration (1).
+## 26. Testing
+```bash
+pytest -q
+# Expected at Phase 10F: 256 passed, 0 failed
+```
+Coverage: normalization, market models/matching/analysis/intelligence, pricing engine (guardrails, SME floor, KPDN cap, PCAPA, confidence), LLM fallback, dashboard, employee removal, integration, market ingestion/MCP, import/ETL, refresh service/status/health/freshness, monitoring UI (RBAC, source isolation, read-only), scheduling (manual/scheduled/partial/dry-run).
+
+## 27. Current Project Status
+- **Branch:** `main`, **Head:** `33b959a98288_add_market_refresh_run` (prior `fa7b68d` + uncommitted 10A-F)
+- **DB:** `MarketSource 2, MarketItem 410, MarketPriceObservation 1,970,997, Product 17, PriceHistory 21, PricingRecommendationDecision 3 PENDING, MarketRefreshRun 0` after test cleanup (demo product 7 `24.68`)
+- **Tests:** `256 passed` at 10F validation point (was 185 at 9F, 197 at 10A, 204 at 10B, 216 at 10C, 228 at 10D, 238 at 10E)
+- **Migration head:** `33b959a98288`
+
+## 28. Limitations
+- No real-time PriceCatcher API (monthly archive, fresh ≤35d is expected)
+- ManaMurah is FAMA daily (5 dry-goods items) — not a full competitor catalogue
+- Historical trend is server-side `PERCENTILE_CONT` over 90 days, not a forecast
+- Scheduling is OS-driven; no in-app job queue
+- Freshness is a qualification of evidence, not a pricing guardrail
+
+## 29. Future Work
+- Additional market sources (if KPDN adds APIs), finer premise geocoding, richer trend analytics, scheduled email summaries for Owner/Manager, and further FYP presentation polish — all as human-approved, non-autonomous enhancements.
+
+> **AI recommends and explains. Business guardrails remain authoritative. Human approval remains part of the decision process. Freshness qualifies evidence; it never overrides KPDN cap, cost floor, SME floor, or market sanity.**

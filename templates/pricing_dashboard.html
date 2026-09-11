@@ -221,6 +221,7 @@
           <th class="text-end">Market Median</th>
           <th>Tier</th>
           <th>Evidence</th>
+          <th>Freshness</th>
           <th>Trend</th>
           <th>Status</th>
           <th>Decision</th>
@@ -256,6 +257,14 @@
             {% elif r.evidence == 'Moderate' %}<span class="badge bg-info">Moderate</span>
             {% elif r.evidence == 'Limited' %}<span class="badge bg-warning text-dark">Limited</span>
             {% else %}<span class="badge bg-secondary">Unavailable</span>{% endif %}
+            {% if r.freshness_warning %}<small class="text-warning d-block" style="font-size:.7em" title="{{ r.freshness_warning }}">⚠</small>{% endif %}
+          </td>
+          <td>
+            {% if r.freshness == 'fresh' %}<span class="badge bg-success">Fresh</span>
+            {% elif r.freshness == 'aging' %}<span class="badge bg-warning text-dark">Aging</span>
+            {% elif r.freshness == 'stale' %}<span class="badge bg-danger">Stale</span>
+            {% else %}<span class="badge bg-secondary">Unavailable</span>{% endif %}
+            {% if r.freshness_label and r.freshness not in ['fresh','stale','aging'] %}<small class="text-muted d-block" style="font-size:.7em">{{ r.freshness_label }}</small>{% endif %}
           </td>
           <td>
             {% if r.trend %}

@@ -71,6 +71,7 @@
   <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
   {% if current_user.role in ['owner', 'manager'] %}
   <li class="nav-item"><a class="nav-link" href="{{ url_for('pricing_dashboard') }}">Pricing Intelligence</a></li>
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('market_data') }}">Market Data</a></li>
   {% endif %}
   <li class="nav-item"><a class="nav-link" href="{{ url_for('sales') }}">Sales</a></li>
   <li class="nav-item"><a class="nav-link" href="{{ url_for('inventory') }}">Inventory</a></li>

@@ -804,6 +804,21 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
     metrics['earliest_observed_at'] = (min(_dates).date().isoformat()
                                        if _dates else None)
 
+    # Phase 10F: freshness-aware evidence (read-only qualification, not a pricing guardrail)
+    # Source-isolated, respects the same geographic filtering as the evidence itself.
+    # Lazy import to avoid circular dependency (market_freshness imports this module).
+    try:
+        from services.market_freshness import get_product_market_freshness
+        _fresh = get_product_market_freshness(product_id, shop)
+    except Exception:
+        _fresh = {"freshness": "unavailable", "age_days": None, "label": "Unavailable", "warning": None, "source": None, "latest_observed_at": None, "thresholds": (7, 14)}
+    metrics['market_freshness'] = _fresh.get('freshness')
+    metrics['freshness_label'] = _fresh.get('label')
+    metrics['freshness_warning'] = _fresh.get('warning')
+    metrics['freshness_age_days'] = _fresh.get('age_days')
+    metrics['freshness_source'] = _fresh.get('source')
+    metrics['freshness'] = _fresh
+
     # Phase 6D: retailer position vs the market median (pure function).
     position = market_position(shop_price, metrics.get('median'))
     metrics.update(position)

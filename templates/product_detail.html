@@ -427,6 +427,12 @@
         {% if pricing.market_evidence %}
           <span class="badge bg-secondary ms-1">Market evidence: {{ pricing.market_evidence }}</span>
         {% endif %}
+        {% if pricing.market_freshness %}
+          <span class="badge {% if pricing.market_freshness == 'fresh' %}bg-success{% elif pricing.market_freshness == 'aging' %}bg-warning text-dark{% elif pricing.market_freshness == 'stale' %}bg-danger{% else %}bg-secondary{% endif %} ms-1">Freshness: {{ pricing.freshness_label }}</span>
+        {% endif %}
+        {% if pricing.freshness_warning %}
+          <div class="alert alert-warning py-1 px-2 mt-2 mb-0" style="font-size:.85em">{{ pricing.freshness_warning }}</div>
+        {% endif %}
         {% if pricing.trend_direction and pricing.trend_direction != 'insufficient_data' %}
           <span class="badge bg-light text-dark border ms-1">Trend: {{ pricing.trend_direction }}{% if pricing.trend_change_percent is not none %} ({{ "%+.1f"|format(pricing.trend_change_percent) }}%){% endif %}</span>
         {% endif %}
@@ -854,6 +860,13 @@
             statusBadges = '<div class="mb-3"><span class="badge fs-6 ' + sClass + '">' + sLabel + '</span>';
             if (data.market_evidence) {
                 statusBadges += ' <span class="badge bg-secondary ms-1">Market evidence: ' + esc(data.market_evidence) + '</span>';
+            }
+            if (data.market_freshness) {
+                var fClass = data.market_freshness === 'fresh' ? 'bg-success' : data.market_freshness === 'aging' ? 'bg-warning text-dark' : data.market_freshness === 'stale' ? 'bg-danger' : 'bg-secondary';
+                statusBadges += ' <span class="badge ms-1 ' + fClass + '">Freshness: ' + esc(data.freshness_label) + '</span>';
+            }
+            if (data.freshness_warning) {
+                statusBadges += '<div class="alert alert-warning py-1 px-2 mt-1" style="font-size:.85em">' + esc(data.freshness_warning) + '</div>';
             }
             if (data.trend_direction && data.trend_direction !== 'insufficient_data') {
                 var tPct = (data.trend_change_percent === null || data.trend_change_percent === undefined)
