@@ -805,11 +805,50 @@ def get_market_stats(product_id, shop=None, page=1, per_page=15):
                                        if _dates else None)
 
     # Phase 10F: freshness-aware evidence (read-only qualification, not a pricing guardrail)
-    # Source-isolated, respects the same geographic filtering as the evidence itself.
-    # Lazy import to avoid circular dependency (market_freshness imports this module).
+    # Reuses the observations already loaded above (_loaded_obs) — no second
+    # round-trip to MarketPriceObservation. Groups by contributing MarketSource
+    # (source-isolated) and picks the most conservative freshness (stale >
+    # aging > fresh) so a stale source is not hidden behind a fresh one.
+    # This preserves the multi-source conservative behavior without duplicating
+    # the _fetch_localized_observations work that get_product_market_freshness()
+    # would otherwise repeat.
     try:
-        from services.market_freshness import get_product_market_freshness
-        _fresh = get_product_market_freshness(product_id, shop)
+        from services.market_freshness import classify_market_freshness
+        # Build per-source latest from the already-filtered observations
+        _per_source_latest = {}
+        _per_source_name = {}
+        for idx, obs_list in enumerate(_loaded_obs):
+            if not obs_list:
+                continue
+            m = matches[idx] if idx < len(matches) else None
+            if not m or not m.market_item or not m.market_item.source:
+                continue
+            src = m.market_item.source
+            src_name = src.name
+            src_key = src_name.strip().lower() if src_name else "unknown"
+            cur_latest = max(o.observed_at for o in obs_list if o.observed_at)
+            if src_key not in _per_source_latest or cur_latest > _per_source_latest[src_key]:
+                _per_source_latest[src_key] = cur_latest
+                _per_source_name[src_key] = src_name
+        if not _per_source_latest:
+            _fresh = classify_market_freshness(None, None)
+        elif len(_per_source_latest) == 1:
+            k = next(iter(_per_source_latest))
+            _fresh = classify_market_freshness(_per_source_name[k], _per_source_latest[k])
+        else:
+            # Multiple contributing sources: most conservative
+            _per_source_classified = {
+                k: classify_market_freshness(_per_source_name[k], v)
+                for k, v in _per_source_latest.items()
+            }
+            # Filter to sources with data (exclude unavailable)
+            _cands = {k: v for k, v in _per_source_classified.items() if v["freshness"] != "unavailable"}
+            if not _cands:
+                _fresh = classify_market_freshness(None, None)
+            else:
+                _order = {"stale": 3, "aging": 2, "fresh": 1, "unavailable": 0}
+                _most = max(_cands, key=lambda k: _order.get(_cands[k]["freshness"], 0))
+                _fresh = _cands[_most]
     except Exception:
         _fresh = {"freshness": "unavailable", "age_days": None, "label": "Unavailable", "warning": None, "source": None, "latest_observed_at": None, "thresholds": (7, 14)}
     metrics['market_freshness'] = _fresh.get('freshness')

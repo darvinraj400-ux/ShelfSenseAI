@@ -31,6 +31,21 @@ from typing import Dict, List, Optional
 from app import db, MarketRefreshRun, MarketSource, MarketItem, MarketPriceObservation
 from services.market_refresh_status import latest_run
 from sqlalchemy import text
+import time
+
+# Simple in-memory cache for observation stats (COUNT/MAX over 1.97M rows)
+# Monitoring page is read-only and counts are stable between refreshes.
+# Cache forever per process, invalidated on successful refresh (see _record_run).
+_OBS_STATS_CACHE: dict = {}
+_OBS_STATS_TTL = 3600.0  # 1 hour — PriceCatcher is monthly, ManaMurah daily
+
+def _invalidate_obs_cache(source_name: str = None):
+    """Invalidate cached observation stats for a source (or all)."""
+    if source_name:
+        key = (source_name or "").strip().lower()
+        _OBS_STATS_CACHE.pop(key, None)
+    else:
+        _OBS_STATS_CACHE.clear()
 
 # ----------------------------------------------------------------
 # Freshness thresholds (deterministic, documented)
@@ -104,7 +119,14 @@ def _source_id_for(name: str) -> Optional[int]:
 
 
 def _observation_stats(source_name: str) -> Dict:
-    """Return {count, latest} for a source's live observations (indexed)."""
+    """Return {count, latest} for a source's live observations (cached)."""
+    # Check in-memory cache first (60s TTL) — avoids scanning 1.97M rows on every /market-data load
+    cache_key = (source_name or "").strip().lower()
+    now = time.monotonic()
+    if cache_key in _OBS_STATS_CACHE:
+        cached, ts = _OBS_STATS_CACHE[cache_key]
+        if now - ts < _OBS_STATS_TTL:
+            return cached
     # Resolve source via case-insensitive lookup
     src_name = None
     lower = (source_name or "").strip().lower()
@@ -113,22 +135,49 @@ def _observation_stats(source_name: str) -> Dict:
     sid = _source_id_for(src_name)
     if sid is None:
         # No MarketSource row → no observations
-        return {"count": 0, "latest": None}
-    # Use indexed subquery: market_item.source_id is indexed via market_item table
-    # and observed_at is indexed via ix_observed_at / ix_market_obs_item_geo
+        result = {"count": 0, "latest": None}
+        _OBS_STATS_CACHE[cache_key] = (result, now)
+        return result
+    # Prefer persisted latest_observed_at from latest MarketRefreshRun if available
+    # (avoids MAX scan). Fall back to live MAX only if no run exists.
+    run = latest_run(cache_key)
+    latest_from_run = run.latest_observed_at if run and run.latest_observed_at else None
+    # For count, use cached COUNT; for latest, prefer run's latest if it exists and is recent
+    # Use indexed subquery: market_item.source_id is indexed
     cnt = db.session.execute(
         text("SELECT COUNT(*) FROM market_price_observation o "
              "JOIN market_item mi ON mi.id=o.market_item_id "
              "WHERE mi.source_id=:sid"),
         {"sid": sid},
     ).scalar() or 0
-    latest = db.session.execute(
-        text("SELECT MAX(o.observed_at) FROM market_price_observation o "
-             "JOIN market_item mi ON mi.id=o.market_item_id "
-             "WHERE mi.source_id=:sid"),
-        {"sid": sid},
-    ).scalar()
-    return {"count": int(cnt), "latest": latest}
+    # Use run's latest if available to avoid MAX scan when possible
+    if latest_from_run is not None:
+        # Verify that live MAX is not newer than run's latest by more than a day
+        # (if a manual observation was added outside refresh, run's latest would be stale)
+        # Do a quick MAX only if run is older than 1 day
+        try:
+            age_run = (datetime.utcnow() - (latest_from_run.replace(tzinfo=None) if getattr(latest_from_run, 'tzinfo', None) else latest_from_run)).days
+            if age_run > 1:
+                latest = db.session.execute(
+                    text("SELECT MAX(o.observed_at) FROM market_price_observation o "
+                         "JOIN market_item mi ON mi.id=o.market_item_id "
+                         "WHERE mi.source_id=:sid"),
+                    {"sid": sid},
+                ).scalar()
+            else:
+                latest = latest_from_run
+        except Exception:
+            latest = latest_from_run
+    else:
+        latest = db.session.execute(
+            text("SELECT MAX(o.observed_at) FROM market_price_observation o "
+                 "JOIN market_item mi ON mi.id=o.market_item_id "
+                 "WHERE mi.source_id=:sid"),
+            {"sid": sid},
+        ).scalar()
+    result = {"count": int(cnt), "latest": latest}
+    _OBS_STATS_CACHE[cache_key] = (result, now)
+    return result
 
 
 def _age_days(latest) -> Optional[int]:

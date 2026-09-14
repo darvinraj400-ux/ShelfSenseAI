@@ -187,6 +187,12 @@ def _record_run(source_name: str, started_at, finished_at,
         from app import app as flask_app
 
         def _write():
+            # Invalidate health cache for this source so next /market-data load sees fresh counts
+            try:
+                from services.market_refresh_health import _invalidate_obs_cache
+                _invalidate_obs_cache(source_name)
+            except Exception:
+                pass
             latest = result.latest_observed_at
             # Normalize latest_observed_at to datetime if it's a date
             if latest is not None:
