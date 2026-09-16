@@ -469,10 +469,13 @@ def train_and_save(samples):
     )
 
     # Train the model
+    # NOTE: Hyperparameters constrained for deployment on Render free tier
+    # (512 MB RAM). Fewer trees + shallower depth keeps the pickle small.
     model = RandomForestRegressor(
-        n_estimators=200,     # More trees for larger dataset
-        max_depth=15,         # Deeper trees for complex patterns
-        min_samples_split=5,  # Prevent overfitting on noise
+        n_estimators=50,        # Fewer trees = smaller file
+        max_depth=12,           # Shallower trees = smaller file
+        min_samples_split=10,   # Slightly higher to reduce splits
+        min_samples_leaf=20,    # Minimum samples per leaf
         random_state=RANDOM_SEED,
         n_jobs=-1,
     )
@@ -511,7 +514,9 @@ def train_and_save(samples):
         "data_source": f"KPDN PriceCatcher {START_YEAR}-{END_YEAR}",
         "localization": f"{TARGET_STATE}" + (f"/{TARGET_DISTRICT}" if TARGET_DISTRICT else ""),
     }
-    joblib.dump(payload, model_path)
+
+    # Save with LZMA compression to shrink file size for free-tier deployment
+    joblib.dump(payload, model_path, compress=('lzma', 9))
 
     print(f"\n  Saved to: {model_path}")
     print(f"  File size: {os.path.getsize(model_path) / 1024:.1f} KB")

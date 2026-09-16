@@ -256,7 +256,18 @@ def _call_gemini(prompt):
         raise RuntimeError("GEMINI_API_KEY not set in environment")
 
     # Step 2: Initialize the Google GenAI client.
-    from google import genai
+    # The import is guarded so a missing/broken google-genai install (or an
+    # OOM during its heavy import) degrades to the deterministic fallback
+    # instead of crashing the request. _fallback() needs (product,
+    # market_stats, recommendation) which this function does not have, so we
+    # re-raise: the existing three-layer handler in
+    # generate_pricing_explanation() catches this and calls _fallback with
+    # the correct arguments.
+    try:
+        from google import genai
+    except Exception as e:
+        logger.warning("Gemini SDK import failed: %s", e)
+        raise RuntimeError("Gemini SDK unavailable") from e
     client = genai.Client(api_key=api_key)
 
     # Step 3: Send the prompt to Gemini 3.5 Flash Lite.

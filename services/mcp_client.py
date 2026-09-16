@@ -109,8 +109,13 @@ class ManaMurahClient:
         # Imported lazily so importing this module never fails on
         # machines where the `mcp` package is not installed (tests
         # mock the client instead).
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+        except Exception as e:
+            import logging
+            logging.warning("MCP import failed: %s", e)
+            raise RuntimeError("MCP client unavailable — install with: pip install mcp") from e
 
         try:
             async with streamablehttp_client(self.url) as (read, write, _):
