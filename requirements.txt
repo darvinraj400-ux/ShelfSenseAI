@@ -35,3 +35,6 @@ google-genai==2.19.0
 
 # --- ManaMurah MCP market-data sync (Phase 5: services/mcp_client.py) ---
 mcp==1.19.0
+
+# --- Production WSGI server (Render deployment) ---
+gunicorn==23.0.0

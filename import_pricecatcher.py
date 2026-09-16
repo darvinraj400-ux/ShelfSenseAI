@@ -369,12 +369,19 @@ def ensure_schema(engine, item_code_len: int, premise_code_len: int):
             )
         """))
     # Live databases created by the original importer predate the natural-key
-    # unique index. Add it when missing (MariaDB supports IF NOT EXISTS).
+    # unique index. MySQL/TiDB do NOT support "CREATE UNIQUE INDEX IF NOT
+    # EXISTS", so check information_schema first and create only if absent.
     with engine.begin() as conn:
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_price_natural "
-            "ON price (date, premise_code, item_code)"
-        ))
+        exists = conn.execute(text(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema = DATABASE() "
+            "AND table_name = :tbl AND index_name = :idx"
+        ), {"tbl": "price", "idx": "uq_price_natural"}).scalar()
+        if not exists:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX uq_price_natural "
+                "ON price (date, premise_code, item_code)"
+            ))
 
 
 def upsert_lookup(engine, table: str, frame: pd.DataFrame, columns: list[str],

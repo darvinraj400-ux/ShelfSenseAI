@@ -46,6 +46,7 @@ the live MySQL schema.
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 
 # revision identifiers, used by Alembic.
@@ -53,6 +54,21 @@ revision = 'e5d4c3b2a1f0'
 down_revision = 'c8b7e2f1d0a3'
 branch_labels = None
 depends_on = None
+
+
+def _index_exists(bind, table_name, index_name):
+    """True when `index_name` already exists on `table_name`.
+
+    MySQL/TiDB use `information_schema.statistics` (there is no
+    `CREATE INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS` support), so
+    index DDL is guarded by this check to stay portable across MariaDB
+    (local dev) and TiDB (production).
+    """
+    return bool(bind.execute(text(
+        "SELECT COUNT(*) FROM information_schema.statistics "
+        "WHERE table_schema = DATABASE() "
+        "AND table_name = :tbl AND index_name = :idx"
+    ), {"tbl": table_name, "idx": index_name}).scalar())
 
 
 def upgrade():
@@ -69,14 +85,18 @@ def upgrade():
     op.create_index('ix_market_item_external', 'market_item',
                     ['external_id'])
     # --- raw archive natural key (order-independent with the importer) -
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_price_natural "
-        "ON price (date, premise_code, item_code)"
-    )
+    # Guarded: MySQL/TiDB have no CREATE INDEX IF NOT EXISTS. The baseline
+    # migration does not add this index to `price`, so create it when absent.
+    bind = op.get_bind()
+    if not _index_exists(bind, 'price', 'uq_price_natural'):
+        op.create_index('uq_price_natural', 'price',
+                        ['date', 'premise_code', 'item_code'], unique=True)
 
 
 def downgrade():
-    op.execute("DROP INDEX IF EXISTS uq_price_natural ON price")
+    bind = op.get_bind()
+    if _index_exists(bind, 'price', 'uq_price_natural'):
+        op.drop_index('uq_price_natural', table_name='price')
     op.drop_index('ix_market_item_external', table_name='market_item')
     op.drop_index('ix_market_obs_item_geo',
                   table_name='market_price_observation')

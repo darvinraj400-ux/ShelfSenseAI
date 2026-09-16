@@ -491,10 +491,11 @@ def get_market_trend(market_item_ids, shop=None,
         tier_label = 'National (no sufficient local data)'
 
     # Indexed range scan: item ids + optional geo filters + date window.
-    # MariaDB 10.4 supports PERCENTILE_CONT only as a WINDOW function, so
-    # the median is computed in an inner query (window partitioned by
-    # date over the raw rows) and the outer GROUP BY takes MAX(med).
-    # Everything else (COUNT/MIN/MAX/AVG) is plain server-side grouping.
+    # TiDB Cloud does NOT support PERCENTILE_CONT(...) WITHIN GROUP (...),
+    # so ALL per-date statistics (median, min, max, mean, counts) are
+    # computed in Python from a single indexed range scan. The scan is
+    # bounded by the item ids, the optional geography filter, and the
+    # lookback window, so only the small trend window is ever fetched.
     placeholders = ','.join(f':i{k}' for k in range(len(ids)))
     params = {f'i{k}': v for k, v in enumerate(ids)}
     params['since'] = datetime.utcnow().date() - timedelta(days=lookback_days)
@@ -507,40 +508,48 @@ def get_market_trend(market_item_ids, shop=None,
         params['st'] = filters[0]
 
     sql = text(f'''
-        SELECT observed_at AS d,
-               COUNT(*) AS n,
-               COUNT(DISTINCT premise_code) AS premises,
-               MIN(regular_price) AS lo,
-               MAX(regular_price) AS hi,
-               AVG(regular_price) AS avg,
-               MAX(med) AS median
-        FROM (
-            SELECT o.observed_at, o.regular_price, o.premise_code,
-                   PERCENTILE_CONT(0.5) WITHIN GROUP
-                     (ORDER BY o.regular_price)
-                     OVER (PARTITION BY o.observed_at) AS med
-            FROM market_price_observation o
-            JOIN market_item mi ON mi.id = o.market_item_id
-            JOIN market_source ms ON ms.id = mi.source_id
-            WHERE o.market_item_id IN ({placeholders})
-              AND ms.is_active = 1
-              AND o.observed_at >= :since
-              {geo_sql}
-        ) raw
-        GROUP BY observed_at
-        ORDER BY observed_at ASC
+        SELECT o.observed_at AS d,
+               o.regular_price AS price,
+               o.premise_code AS premise
+        FROM market_price_observation o
+        JOIN market_item mi ON mi.id = o.market_item_id
+        JOIN market_source ms ON ms.id = mi.source_id
+        WHERE o.market_item_id IN ({placeholders})
+          AND ms.is_active = 1
+          AND o.observed_at >= :since
+          {geo_sql}
+        ORDER BY o.observed_at ASC
     ''')
     rows = db.session.execute(sql, params).fetchall()
 
-    points = [{
-        'date': r.d.date().isoformat() if hasattr(r.d, 'date') else str(r.d),
-        'median': _r2(float(r.median)) if r.median is not None else None,
-        'min': _r2(float(r.lo)) if r.lo is not None else None,
-        'max': _r2(float(r.hi)) if r.hi is not None else None,
-        'mean': _r2(float(r.avg)) if r.avg is not None else None,
-        'observations': int(r.n),
-        'premises': int(r.premises),
-    } for r in rows]
+    # Group the fetched prices by observation DATE (no invented dates).
+    by_date = {}
+    for r in rows:
+        if r.price is None:
+            continue
+        key = r.d.date() if hasattr(r.d, 'date') else r.d
+        bucket = by_date.setdefault(key, {'prices': [], 'premises': set()})
+        bucket['prices'].append(float(r.price))
+        if r.premise:
+            bucket['premises'].add(r.premise)
+
+    points = []
+    for d in sorted(by_date):
+        bucket = by_date[d]
+        prices = bucket['prices']
+        if not prices:
+            continue
+        points.append({
+            'date': d.isoformat() if hasattr(d, 'isoformat') else str(d),
+            # statistics.median() averages the two middle values for even
+            # counts, matching PERCENTILE_CONT(0.5)'s interpolation.
+            'median': _r2(_median(prices)),
+            'min': _r2(min(prices)),
+            'max': _r2(max(prices)),
+            'mean': _r2(sum(prices) / len(prices)),
+            'observations': len(prices),
+            'premises': len(bucket['premises']),
+        })
 
     return {'tier': tier, 'tier_label': tier_label, 'points': points}
 

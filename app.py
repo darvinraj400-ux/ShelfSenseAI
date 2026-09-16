@@ -72,8 +72,30 @@ if not db_url:
     raise RuntimeError("DATABASE_URL not found in .env file")
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dev-secret-change-in-prod'   # signs cookies/sessions
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-in-prod')   # signs cookies/sessions
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url           # where MySQL lives
+
+import base64
+import tempfile
+
+# --- Production DB engine options (TiDB Cloud / Render) ---
+# pool_pre_ping + pool_recycle avoid "MySQL server has gone away" when the
+# managed database closes idle connections. TLS is configured below when the
+# TiDB CA certificate is supplied (Render has an ephemeral filesystem, so the
+# CA is provided base64-encoded via an env var and written to the temp dir).
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 280,
+}
+ca_b64 = os.getenv("TIDB_CA_CERT_B64")
+if ca_b64:
+    ca_path = os.path.join(tempfile.gettempdir(), "tidb_ca.pem")
+    with open(ca_path, "wb") as f:
+        f.write(base64.b64decode(ca_b64))
+    app.config['SQLALCHEMY_ENGINE_OPTIONS']["connect_args"] = {
+        "ssl": {"ca": ca_path}
+    }
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False     # performance: no change notifications
 
 import pymysql
