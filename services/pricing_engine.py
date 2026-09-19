@@ -218,12 +218,36 @@ def recommendation_status(recommended_price, current_price,
     return 'REDUCE' if recommended_price < current_price else 'INCREASE'
 
 
+def _get_model_path():
+    """Resolve the ML model file location for the current environment.
+
+    Leapcell builds download the model into /tmp/ml/ (the only writable
+    directory on its read-only filesystem), while local development keeps
+    the model at <project_root>/ml/pricing_model.pkl. The /tmp location
+    is checked first so the deployed build always wins when present.
+    """
+    # Leapcell / production: /tmp/ml/pricing_model.pkl
+    tmp_path = "/tmp/ml/pricing_model.pkl"
+    if os.path.exists(tmp_path):
+        return tmp_path
+    # Local dev: <project_root>/ml/pricing_model.pkl
+    local_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "ml", "pricing_model.pkl"
+    )
+    if os.path.exists(local_path):
+        return local_path
+    # Optional: allow env var override for testing
+    return os.getenv("MODEL_PATH", local_path)
+
+
 def _load_model():
     """Load the trained RandomForestRegressor from disk (cached after first load).
 
     The model file (ml/pricing_model.pkl) is a generated artifact produced
     by scripts/train_pricing_model.py. It is excluded from version control
-    (.gitignore) because it is a build artifact, not source code.
+    (.gitignore) because it is a build artifact, not source code. On Leapcell
+    the model is downloaded at build time into /tmp/ml/ (see build.sh).
 
     Returns:
         The model payload dict (containing 'model', 'feature_names', etc.)
@@ -235,11 +259,8 @@ def _load_model():
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
 
-    # Construct the path to the model file relative to this script.
-    model_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "ml", "pricing_model.pkl"
-    )
+    # Resolve the path for this environment (Leapcell /tmp first, then local).
+    model_path = _get_model_path()
 
     # If the model file doesn't exist, return None to trigger fallback.
     if not os.path.exists(model_path):
