@@ -4,7 +4,7 @@
 
 **Live demo:** https://app.shelfsenseai.online
 
-![ShelfSenseAI Pricing Dashboard](docs/screenshots/pricing-dashboard.png)
+<!-- ![ShelfSenseAI Pricing Dashboard](docs/screenshots/pricing-dashboard.png) -->
 
 > **Want to run it locally?** See [Local Development Setup](#local-development-setup).
 > **Want to understand the architecture?** See [Architecture](#architecture).
@@ -56,7 +56,7 @@ pip install -r requirements.txt
 Create `.env` from `.env.example`:
 ```env
 SECRET_KEY=your_secret_key
-DATABASE_URL=mysql+pymysql://user:pass@localhost/shelfsenseai
+DATABASE_URL=mysql+pymysql://user:pass@localhost/shelfsense_db
 GEMINI_API_KEY=your_gemini_api_key   # optional; fallback works without it
 ```
 
