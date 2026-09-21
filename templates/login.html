@@ -5,6 +5,10 @@
   <div class="col-md-5">
     <div class="card shadow-sm">
       <div class="card-body p-4">
+        <div class="text-center mb-3">
+          <img src="{{ url_for('static', filename='images/logo.png') }}"
+               alt="ShelfSenseAI" height="72">
+        </div>
         <h3 class="text-center mb-4">ShelfSense AI</h3>
         <form method="POST">
           {{ form.hidden_tag() }}

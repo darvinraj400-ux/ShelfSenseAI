@@ -30,7 +30,7 @@ DESIGN DECISIONS
   the dashboard is always fresh — stale metrics would be misleading.
 ============================================================
 """
-from app import db, Product, Inventory, PriceHistory  # noqa: E402
+from app import db, Product, Inventory, PriceHistory, Shop  # noqa: E402
 from services.market_analysis import get_market_stats  # noqa: E402
 
 
@@ -79,6 +79,11 @@ def get_dashboard_metrics(shop_id):
     products = Product.query.filter_by(shop_id=shop_id).all()
     inventory_map = {inv.product_id: inv
                      for inv in Inventory.query.filter_by(shop_id=shop_id).all()}
+    # Load the Shop once so per-product market stats use the same
+    # district → state → national filtering as the product page
+    # (instead of unfiltered national data). None if the shop is gone,
+    # in which case get_market_stats falls back to national as before.
+    shop = db.session.get(Shop, shop_id)
 
     # --- Step 2: Initialize counters and accumulators ---
     total_products = len(products)
@@ -116,7 +121,7 @@ def get_dashboard_metrics(shop_id):
 
         # --- PPI (Price Position Index) CHECK ---
         # Only check if the product has verified market matches with valid data.
-        stats = get_market_stats(p.id)
+        stats = get_market_stats(p.id, shop=shop)
         if stats.get("n", 0) > 0 and stats.get("median") and stats.get("ppi"):
             ppi = float(stats["ppi"])
             if ppi > PPI_OVERPRICED:

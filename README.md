@@ -1,10 +1,12 @@
+<p align="center">
+  <img src="static/images/logo.png" alt="ShelfSenseAI" width="200">
+</p>
+
 # ShelfSenseAI
 
 **Decision support for kedai runcit pricing — market intelligence, guardrailed AI recommendations, human approval.**
 
 **Live demo:** https://app.shelfsenseai.online
-
-<!-- ![ShelfSenseAI Pricing Dashboard](docs/screenshots/pricing-dashboard.png) -->
 
 > **Want to run it locally?** See [Local Development Setup](#local-development-setup).
 > **Want to understand the architecture?** See [Architecture](#architecture).

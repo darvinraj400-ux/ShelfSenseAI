@@ -45,6 +45,7 @@ from datetime import datetime, timedelta
 
 import joblib
 import numpy as np
+from sqlalchemy import func
 
 from app import (  # noqa: E402
     db, Product, Inventory, PriceHistory
@@ -218,36 +219,12 @@ def recommendation_status(recommended_price, current_price,
     return 'REDUCE' if recommended_price < current_price else 'INCREASE'
 
 
-def _get_model_path():
-    """Resolve the ML model file location for the current environment.
-
-    Leapcell builds download the model into /tmp/ml/ (the only writable
-    directory on its read-only filesystem), while local development keeps
-    the model at <project_root>/ml/pricing_model.pkl. The /tmp location
-    is checked first so the deployed build always wins when present.
-    """
-    # Leapcell / production: /tmp/ml/pricing_model.pkl
-    tmp_path = "/tmp/ml/pricing_model.pkl"
-    if os.path.exists(tmp_path):
-        return tmp_path
-    # Local dev: <project_root>/ml/pricing_model.pkl
-    local_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "ml", "pricing_model.pkl"
-    )
-    if os.path.exists(local_path):
-        return local_path
-    # Optional: allow env var override for testing
-    return os.getenv("MODEL_PATH", local_path)
-
-
 def _load_model():
     """Load the trained RandomForestRegressor from disk (cached after first load).
 
     The model file (ml/pricing_model.pkl) is a generated artifact produced
     by scripts/train_pricing_model.py. It is excluded from version control
-    (.gitignore) because it is a build artifact, not source code. On Leapcell
-    the model is downloaded at build time into /tmp/ml/ (see build.sh).
+    (.gitignore) because it is a build artifact, not source code.
 
     Returns:
         The model payload dict (containing 'model', 'feature_names', etc.)
@@ -259,8 +236,11 @@ def _load_model():
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
 
-    # Resolve the path for this environment (Leapcell /tmp first, then local).
-    model_path = _get_model_path()
+    # Construct the path to the model file relative to this script.
+    model_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "ml", "pricing_model.pkl"
+    )
 
     # If the model file doesn't exist, return None to trigger fallback.
     if not os.path.exists(model_path):
@@ -570,6 +550,10 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
     market_spread = market.get("spread") or 0.0
 
     # Compute average normalized unit price across verified match observations.
+    # Single SQL AVG per match (same row set the old Python loop averaged:
+    # active sources only, NULL and non-positive prices excluded). No date
+    # bound is applied — the feature must see the identical set the old
+    # code averaged, so the ML input (and therefore the price) is unchanged.
     unit_price = 0.0
     if has_market_data and market.get("matches"):
         from app import MarketPriceObservation, MarketItem, MarketSource, ProductMarketMatch
@@ -578,17 +562,19 @@ def get_price_recommendation(product_id, shop=None, skip_llm=False):
                    .filter_by(shop_product_id=product_id, is_verified=True)
                    .all())
         for m in matches:
-            # Query observations joined through MarketItem and MarketSource
+            # Aggregate in SQL through MarketItem and MarketSource
             # to ensure only ACTIVE sources contribute.
-            obs = (MarketPriceObservation.query
-                   .join(MarketItem)
-                   .join(MarketSource)
-                   .filter(MarketPriceObservation.market_item_id == m.market_item_id,
-                           MarketSource.is_active.is_(True))
-                   .all())
-            for o in obs:
-                if o.normalized_unit_price and float(o.normalized_unit_price) > 0:
-                    obs_prices.append(float(o.normalized_unit_price))
+            avg_price = (db.session.query(func.avg(
+                            MarketPriceObservation.normalized_unit_price))
+                         .join(MarketItem)
+                         .join(MarketSource)
+                         .filter(MarketPriceObservation.market_item_id == m.market_item_id,
+                                 MarketSource.is_active.is_(True),
+                                 MarketPriceObservation.normalized_unit_price.isnot(None),
+                                 MarketPriceObservation.normalized_unit_price > 0)
+                         .scalar())
+            if avg_price is not None:
+                obs_prices.append(float(avg_price))
         if obs_prices:
             unit_price = float(np.mean(obs_prices))
 
